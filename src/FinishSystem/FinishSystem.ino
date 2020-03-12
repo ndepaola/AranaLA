@@ -104,7 +104,8 @@ void update_display()
 		    bitmap + (scan_row + 12) * rowsize,
 	  };
 
-    rf95.DisableInterrupt();
+    // rf95.DisableInterrupt();
+    cli();
     SPI.beginTransaction(settings);
 
 	  for (int i = 0; i < rowsize; i++) 
@@ -116,7 +117,8 @@ void update_display()
 	  }
 
     SPI.endTransaction();
-    rf95.EnableInterrupt();
+    // rf95.EnableInterrupt();
+    sei();
 
 	  digitalWrite(pin_noe, LOW);
 	  digitalWrite(pin_sck, HIGH);
