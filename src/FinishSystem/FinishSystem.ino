@@ -1,12 +1,24 @@
 #include <SPI.h>
+#include <Wire.h>
+#include <RtcDS3231.h>
+#include <RH_RF95.h>
+
+// screen /dev/cu.usbmodem14201 9600
 
 // display data
 #define pin_a   6
 #define pin_b   7
 #define pin_sck 8
 #define pin_noe 9
-
+#define RFM95_SCK 13
+#define RFM95_MISO 12
+#define RFM95_MOSI 11
+#define RFM95_CS 5
+#define RFM95_RST 4
+#define RFM95_INT 3
 #define RF95_FREQ 433.0
+
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
 byte scan_row;
 uint8_t bitmap[256];
@@ -22,8 +34,54 @@ void init_display()
     SPI.begin();
 }
 
-#include <Wire.h>
-#include <RtcDS3231.h>
+
+void setupRF()
+{
+    Serial.println("Being setting up pins for RFM95.");
+    pinMode(RFM95_MISO, OUTPUT); // default slave select pin for client mode 
+    pinMode(RFM95_MOSI, INPUT);
+    pinMode(RFM95_RST, OUTPUT);
+    pinMode(RFM95_CS, OUTPUT);
+    Serial.println("Finished setting up pins.");
+
+    Serial.println("Resetting RFM95 Module.");
+    // digitalWrite(RFM95_CS, LOW);
+    // digitalWrite(RFM95_RST, HIGH);
+    // delay(10);
+    // digitalWrite(RFM95_RST, LOW);
+    // Manual Reset
+    digitalWrite(RFM95_RST, LOW);
+    pinMode(RFM95_RST, OUTPUT);
+    delayMicroseconds(100);
+    pinMode(RFM95_RST, INPUT);
+    delay(5);
+    
+    
+    Serial.println("RFM95 Module reset.");
+
+    // while (!rf95.init());
+    if (!rf95.init()) {
+      Serial.println("init failed");
+      while(1);
+    }
+    Serial.println("RFM95 Module initialised!");
+
+    Serial.println("Set transmission power to 13 dBm.");
+    rf95.setTxPower(13, false);
+    Serial.println("Power set to 13 dBm.");
+}
+
+void setupSerial()
+{
+    Serial.begin(9600);
+    while (!Serial) {
+      continue; // Wait for Serial port to be available
+    }
+
+    Serial.println("Serial setup complete");
+    // Serial.println("Setup Complete");
+}
+
 
 // clock data
 volatile unsigned long tick = 0;
@@ -40,20 +98,20 @@ void init_clock()
     rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);  
 }
 
-#include <RH_RF95.h>
 
-RH_RF95 rf95(4, 3);
 
-void init_RF()
-{
-    if (!rf95.init())
-      Serial.println("init failed"); 
+// RH_RF95 rf95(4, 3);
 
-    rf95.setFrequency(433);
-}
+// void init_RF()
+// {
+//     if (!rf95.init())
+//       Serial.println("init failed"); 
 
-uint8_t buf[255];
-uint8_t len;
+//     rf95.setFrequency(433);
+// }
+
+// uint8_t buf[255];
+// uint8_t len;
 
 int last_minutes = -1, last_tens = -1, last_seconds = -1, last_coln = -1;
 
@@ -67,18 +125,42 @@ void restart()
     memset(bitmap, 0xFF, 256);
 }
 
+uint8_t buf[255];
+uint8_t len;
+
 void check_for_RF_message()
 {
-    if (rf95.recv(buf, &len))
+    long other;
+    uint8_t len;
+    if (rf95.recv((uint8_t*)&other, &len))
+    {
+        // Serial.println((char*)buf);
+        Serial.println(other);
+        Serial.println("Received.");
+        // test
         restart();
+    }
+    // if (rf95.recv(buf, &len))
+    // restart();
+        
 }
+
+// void check_for_RF_message()
+// {
+//     if (rf95.recv(buf, &len))
+//         restart();
+// }
 
 void setup()
 { 
-    //Serial.begin(9600);
-    //while (!Serial) ; // Wait for serial port to be available
+    // Serial.begin(9600);
+    // while (!Serial) ; // Wait for serial port to be available
   
-    init_RF();
+    // init_RF();
+    setupSerial();
+    delay(1000);
+    setupRF();
+
     init_display();
     init_clock();
     update_bitmap(0);
@@ -104,7 +186,8 @@ void update_display()
 		    bitmap + (scan_row + 12) * rowsize,
 	  };
 
-    rf95.DisableInterrupt();
+    // rf95.DisableInterrupt();
+    cli();
     SPI.beginTransaction(settings);
 
 	  for (int i = 0; i < rowsize; i++) 
@@ -116,7 +199,8 @@ void update_display()
 	  }
 
     SPI.endTransaction();
-    rf95.EnableInterrupt();
+    // rf95.EnableInterrupt();
+    sei();
 
 	  digitalWrite(pin_noe, LOW);
 	  digitalWrite(pin_sck, HIGH);
