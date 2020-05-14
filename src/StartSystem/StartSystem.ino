@@ -213,6 +213,12 @@ void loop()
     if (digitalRead(START_BUTTON) == HIGH && off == ULONG_MAX){
         SendRFMessage(0);
     }
+    else if (digitalRead(SYNC_BUTTON) == HIGH && off == ULONG_MAX)
+    {
+        SendRFMessage(1);
+    }
+
+
 
     if (milliSeconds > off)
     {

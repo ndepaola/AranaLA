@@ -18,6 +18,8 @@
 #define RFM95_INT 3
 #define RF95_FREQ 433.0
 
+#define MSG_LENGTH 16
+
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
 byte scan_row;
@@ -127,39 +129,119 @@ void restart()
     memset(bitmap, 0xFF, 256);
 }
 
-uint8_t buf[255];
-uint8_t len;
+// uint8_t buf[255];
+// uint8_t len;
 
-void check_for_RF_message()
+char msgType;
+unsigned int msgTime;
+
+// screen /dev/cu.usbmodem14101
+bool check_for_RF_message(char &msgType, unsigned int &msgTime)
 {
-    long other;
+    uint8_t buf[16];
     uint8_t len;
-    if (rf95.recv((uint8_t*)&other, &len))
-    {
-        // Serial.println((char*)buf);
-        Serial.println(other);
-        Serial.println("Received.");
-        // test
-        restart();
 
-        if (buf[0] == 0)
+    // Check if a message has been received 
+    if (rf95.recv(buf, &len))
+    {   
+        // Start measuring execution time
+        unsigned long current_micros = micros();
+
+        // Retrieve msgType and msgTime from the received message 
+        msgType = buf[0];
+        char systemTime[MSG_LENGTH-2];
+        for(int i=0; i<MSG_LENGTH-3; i++) {
+            if ((char) buf[i+2] == 'l') {
+                systemTime[i] = '\0';
+                break;
+            }
+            systemTime[i] = (char) buf[i+2];
+        }
+        msgTime = atoi(systemTime);
+
+        // Finish measuring execution time
+        current_micros = micros() - current_micros;
+
+        // Debugging prints
+        // Serial.println("Received a new message:");
+        // Serial.println("Execution time (microseconds)");
+        // Serial.println(current_micros);  
+        // Serial.println("Message type");
+        // Serial.println(msgType);
+        // Serial.println("Message time");
+        // Serial.println(msgTime);
+        // Serial.println("");
+        if (msgType == '0')
         {
             Serial.println("Started Race!");
             hold_zero = false;
             restart();
         }
-        else if (buf[0] == 1)
+        else if (msgType == '1')
         {
             Serial.println("Reset received!");
             hold_zero = true;
             restart();
             update_display();
         }
-    }
-    // if (rf95.recv(buf, &len))
-    // restart();
-        
+        else
+        {
+            Serial.println("Error occured in transmission.");
+        }
+
+        return true;
+    } else {
+        return false;
+    }     
 }
+
+// void check_for_RF_message()
+// {
+//     uint8_t buf[16];
+//     uint8_t len;
+//     if (rf95.recv(buf, &len))
+//     {
+//         // Serial.println((char*)buf);
+//         // Serial.println(other);
+//         // Serial.println("Received.");
+//         // test
+//         // restart();
+
+//         unsigned long current_micros = micros();
+
+//         // Retrieve msgType and msgTime from the received message 
+//         msgType = buf[0];
+//         char systemTime[MSG_LENGTH-2];
+//         for(int i=0; i<MSG_LENGTH-3; i++) {
+//             if ((char) buf[i+2] == 'l') {
+//                 systemTime[i] = '\0';
+//                 break;
+//             }
+//             systemTime[i] = (char) buf[i+2];
+//         }
+//         msgTime = atoi(systemTime);
+
+//         // Finish measuring execution time
+//         current_micros = micros() - current_micros;
+
+//         if (buf[0] == 0)
+//         {
+//             Serial.println("Started Race!");
+//             hold_zero = false;
+//             restart();
+//         }
+//         else if (buf[0] == 1)
+//         {
+//             Serial.println("Reset received!");
+//             hold_zero = true;
+//             restart();
+//             update_display();
+//         }
+//     }
+//     // if (rf95.recv(buf, &len))
+//     // restart();
+        
+// }
 
 // void check_for_RF_message()
 // {
@@ -180,6 +262,10 @@ void setup()
     init_display();
     init_clock();
     update_bitmap(0);
+    update_display();
+    update_display();
+    update_display();
+    update_display();
 
     //Serial.println("init successful");
 }
@@ -295,7 +381,14 @@ void update_bitmap(unsigned long time)
 void loop()
 {
    if (rf95.available())
-       check_for_RF_message();
+       if (check_for_RF_message(msgType, msgTime)) {
+            // a message has been received 
+            // print out the received message 
+            Serial.println("Message type");
+            Serial.println(msgType);
+            Serial.println("Message time");
+            Serial.println(msgTime);
+        }
     
     if (!hold_zero)
     {
