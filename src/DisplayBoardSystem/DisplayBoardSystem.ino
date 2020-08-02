@@ -5,7 +5,7 @@
 #include <RH_RF95.h>
 #include "TimerOne.h"
 
-// display data
+// Pin definitions and RF parameters
 #define pin_a 6
 #define pin_b 7
 #define pin_sck 8
@@ -19,17 +19,17 @@
 #define RF95_FREQ 433.0
 #define MSG_LENGTH 16
 
-//#define ROWSIZE 16
+// Display board parameters
 #define DISPLAY_REFRESH_MS 500 // Microseconds between display refreshes. Was originally 500 but I found 5000 reduced flickering?
-#define BITMAP_REFRESH_TICKS 100 // 1000 ticks (milliseconds) before display board updates
-#define BRIGHTNESS 5
-
+#define BITMAP_REFRESH_TICKS 596 // Ticks before display board updates
+#define BRIGHTNESS 1
 #define PANEL_WIDTH 32
 #define PANEL_HEIGHT 16
 #define SCREEN_WIDTH PANEL_WIDTH * 2
 #define SCREEN_HEIGHT PANEL_HEIGHT * 2
 #define SCREEN_WIDTH_B SCREEN_WIDTH / 8
 
+// Import font from separate file
 #include "font.h"
 
 // Clock variables
@@ -49,9 +49,8 @@ void init_clock()
     pinMode(2, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(2), RTCInterruptHandler, RISING);
     rtcObject.Begin();
-    // TODO: Check if this is exactly 1000 Hz or if it's actually 1024 Hz
     rtcObject.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
-    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
+    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_8kHz);
 }
 
 void init_display()
@@ -96,7 +95,7 @@ void update_display()
         bitmap + (scan_row + 4) * PANEL_HEIGHT,
         bitmap + (scan_row + 8) * PANEL_HEIGHT,
         bitmap + (scan_row + 12) * PANEL_HEIGHT};
-    cli();
+    // cli();
 
     SPI.beginTransaction(settings);
 
@@ -111,7 +110,7 @@ void update_display()
 
     SPI.endTransaction();
 
-    sei();
+    // sei();
 
     // Write to display board digital pins
     digitalWrite(pin_sck, HIGH); // Latch DMD shift register output
