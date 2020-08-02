@@ -20,7 +20,7 @@
 #define MSG_LENGTH 16
 
 //#define ROWSIZE 16
-#define DISPLAY_REFRESH_MS 500   // Microseconds between display refreshes. Was originally 500 but I found 5000 reduced flickering?
+#define DISPLAY_REFRESH_MS 500 // Microseconds between display refreshes. Was originally 500 but I found 5000 reduced flickering?
 #define BITMAP_REFRESH_TICKS 100 // 1000 ticks (milliseconds) before display board updates
 #define BRIGHTNESS 5
 
@@ -33,8 +33,7 @@
 #include "font.h"
 
 // Clock variables
-// TODO: Unsigned char to take up less memory instead?
-unsigned char tick = 0; // Ticks up to 100(?) then resets
+volatile unsigned short tick = 0;
 unsigned char tenths = 0;
 unsigned char seconds0 = 0;
 unsigned char seconds1 = 0;
@@ -50,6 +49,7 @@ void init_clock()
     pinMode(2, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(2), RTCInterruptHandler, RISING);
     rtcObject.Begin();
+    // TODO: Check if this is exactly 1000 Hz or if it's actually 1024 Hz
     rtcObject.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
     rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
 }
@@ -74,6 +74,16 @@ void RTCInterruptHandler()
 void wipe_bitmap()
 {
     memset(bitmap, 0xFF, 256);
+}
+
+void restart()
+{
+    wipe_bitmap();
+    tick = 0;
+    tenths = 0;
+    seconds0 = 0;
+    seconds1 = 0;
+    minutes = 0;
 }
 
 void update_display()
@@ -153,67 +163,61 @@ void update_clock()
 void update_bitmap()
 {
     // Update the bitmap to reflect the current clock state
+    // Sorry for the magic numbers in this part of the code for digit locations
     wipe_bitmap();
     if (minutes > 0)
     {
-        display_digit(seconds0, SCREEN_WIDTH - DIGIT_WIDTH - 2);
-        display_digit(seconds1, SCREEN_WIDTH - 2 * (DIGIT_WIDTH + 2));
-        display_digit(minutes, SCREEN_WIDTH - 3 * (DIGIT_WIDTH + 2));
+        display_digit(digits[seconds0], 5, 5);
+        display_digit(digits[seconds1], 3, 3);
+        display_digit(colon, 1, 3);
+        display_digit(digits[minutes], 0, 3);
+
     }
     else
     {
-        display_digit(tenths, SCREEN_WIDTH - DIGIT_WIDTH - 2);
-        display_digit(seconds0, SCREEN_WIDTH - 2 * (DIGIT_WIDTH + 2));
-        if (seconds1 > 0) {
-            display_digit(seconds1, SCREEN_WIDTH - 3 * (DIGIT_WIDTH + 2));
+        display_digit(digits[tenths], 5, 5);   // SCREEN_WIDTH - DIGIT_WIDTH - 2
+        display_digit(dot, 3, 5);
+        display_digit(digits[seconds0], 2, 5); // SCREEN_WIDTH - 2 * (DIGIT_WIDTH + 2)
+        if (seconds1 > 0)
+        {
+            display_digit(digits[seconds1], 0, 3); // SCREEN_WIDTH - 3 * (DIGIT_WIDTH + 2)
         }
     }
 }
 
-void display_digit(int digit, int offset)
+void display_digit (uint16_t *digit, int num_bytes, int byte_offset)
 {
-    // Reference to current digit for convenience
-    const uint16_t *digit_char = digits[digit];
-
-    // Determine the number of bytes from the left that the digit to be drawn is, and the offset starting from that byte
-    unsigned char byte_offset = offset % 8;
-    unsigned char num_bytes = (offset - byte_offset) / 8;
-
-    // Write the specified digit to the display board, at the given offset from the left side of the board
-    // Write line-by-line
+    // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
     unsigned char start_byte;
-    unsigned char mask1;
-    unsigned char mask2;
-    for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; i++)
+    unsigned char mask1 = 0xFFFF >> (DIGIT_WIDTH - (8 - byte_offset));
+    unsigned char mask2 = 0xFFFF << (8 - byte_offset);
+
+    // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
+    for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
     {
         // Reference to current line of digit for convenience
-        uint16_t curr_line = digit_char[i - DIGIT_HEIGHT_OFFSET];
+        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
 
         // When calculating the row number, note that the display board considers all four panels side-by-side
         // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
         // index as such: 0, 2, 4, 6, 8, 10, ... , 30, 1, 3, 5, 7, 9, ... , 27, 29, 31
         // The calculation for row below takes this into account
-        row = (2 * i - (SCREEN_HEIGHT - 1) * (i >= PANEL_HEIGHT));
+        row = 2 * i;
+        if (i >= PANEL_HEIGHT)
+        {
+            row -= SCREEN_HEIGHT - 1;
+        }
         start_byte = row * SCREEN_WIDTH_B + num_bytes;
 
-        // TODO: Does it matter that I compare every iteration of the loop?
-        if (byte_offset == 0)
-        {
-            // Straightforward case - digit lands exactly within two bytes of bitmap
-            bitmap[start_byte] = (uint8_t)(curr_line >> 8);
-            bitmap[start_byte + 1] = (uint8_t)(curr_line);
-        }
-        else
-        {
-            // More generic case - digit is partially spread over three bytes of bitmap
-            // Use bit masking to nly modify the bits within the digit's bounds
-            mask1 = 0xFFFF >> (DIGIT_WIDTH - (8 - byte_offset));
-            mask2 = 0xFFFF << (8 - byte_offset);
-            bitmap[start_byte] = (uint8_t)(bitmap[start_byte] & ~mask1) | (curr_line >> (8 + byte_offset) & mask1);
-            bitmap[start_byte + 1] = (uint8_t)((curr_line >> byte_offset));
-            bitmap[start_byte + 2] = (uint8_t)(bitmap[start_byte + 2] & ~mask2) | ((curr_line << (8 - byte_offset)) & mask2);
-        }
+        // Set the 16 bits for this line in three steps, since the digit could be spread over three bytes
+        // Use bit masking to retain the existing contents of the byte where we don't need to overwrite it
+        // First byte - if the digit is offset by n relative to the current byte, write bits 1:8-n bits to this byte
+        bitmap[start_byte] = (bitmap[start_byte] & ~mask1) | (curr_line >> (8 + byte_offset) & mask1);
+        // Second byte - write bits n+1:n+8 to this byte
+        bitmap[start_byte + 1] = ((curr_line >> byte_offset));
+        // Third byte - write bits (n+9:end) to this byte
+        bitmap[start_byte + 2] = (bitmap[start_byte + 2] & ~mask2) | ((curr_line << (8 - byte_offset)) & mask2);
     }
 }
 
@@ -243,9 +247,6 @@ void setup()
 
 void loop()
 {
-    // delay(1000);
-    // display_idle();
-
     if (tick >= BITMAP_REFRESH_TICKS)
     {
         update_clock();
