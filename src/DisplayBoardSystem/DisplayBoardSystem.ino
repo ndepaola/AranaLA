@@ -21,7 +21,7 @@
 
 // Display board parameters
 #define DISPLAY_REFRESH_MS 500 // Microseconds between display refreshes. Was originally 500 but I found 5000 reduced flickering?
-#define BITMAP_REFRESH_TICKS 596 // Ticks before display board updates
+#define BITMAP_REFRESH_TICKS 100 // 1000 ticks (milliseconds) before display board updates
 #define BRIGHTNESS 1
 #define PANEL_WIDTH 32
 #define PANEL_HEIGHT 16
@@ -39,18 +39,25 @@ unsigned char seconds0 = 0;
 unsigned char seconds1 = 0;
 unsigned char minutes = 0;
 
+// RF variables 
+char msgType;
+unsigned short msgTime;
+
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
 uint8_t bitmap[256];
 RtcDS3231<TwoWire> rtcObject(Wire);
 SPISettings settings(4000000, MSBFIRST, SPI_MODE0); // TODO: Verify that this is correct?
 byte scan_row = 0;
+bool is_idle = false;
 
 void init_clock()
 {
     pinMode(2, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(2), RTCInterruptHandler, RISING);
     rtcObject.Begin();
+    // TODO: Check if this is exactly 1000 Hz or if it's actually 1024 Hz
     rtcObject.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
-    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_8kHz);
+    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
 }
 
 void init_display()
@@ -62,6 +69,26 @@ void init_display()
     digitalWrite(pin_noe, LOW);
     pinMode(pin_noe, OUTPUT);
     SPI.begin();
+}
+
+void init_RF()
+{
+    // Assign pins to RF module
+    pinMode(RFM95_MISO, OUTPUT);
+    pinMode(RFM95_MOSI, INPUT);
+    pinMode(RFM95_RST, OUTPUT);
+    pinMode(RFM95_CS, OUTPUT);
+    digitalWrite(RFM95_RST, LOW);
+    pinMode(RFM95_RST, OUTPUT);
+    delayMicroseconds(100);
+    pinMode(RFM95_RST, INPUT);
+    delay(5);
+    // Pause until RFM96W has initialised properly
+    if (!rf95.init())
+    {
+        while (1);
+    }
+    rf95.setTxPower(13, false);
 }
 
 void RTCInterruptHandler()
@@ -83,6 +110,48 @@ void restart()
     seconds0 = 0;
     seconds1 = 0;
     minutes = 0;
+}
+
+bool check_for_RF_message(char &msgType, unsigned short &msgTime)
+{
+    uint8_t buf[16];
+    uint8_t len;
+
+    // Check if a message has been received
+    if (rf95.recv(buf, &len))
+    {
+        // Retrieve msgType and msgTime from the received message
+        msgType = buf[0];
+        char systemTime[MSG_LENGTH - 2];
+        for (int i = 0; i < MSG_LENGTH - 3; i++)
+        {
+            if ((char)buf[i + 2] == 'l')
+            {
+                systemTime[i] = '\0';
+                break;
+            }
+            systemTime[i] = (char)buf[i + 2];
+        }
+        msgTime = atoi(systemTime);
+
+        if (msgType == '1')
+        {
+            // Race started
+            is_idle = false;
+            restart();
+        }
+        else if (msgType == '0')
+        {
+            // Reset message received
+            is_idle = true;
+            restart();
+        }
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 void update_display()
@@ -170,11 +239,10 @@ void update_bitmap()
         display_digit(digits[seconds1], 3, 3);
         display_digit(colon, 1, 3);
         display_digit(digits[minutes], 0, 3);
-
     }
     else
     {
-        display_digit(digits[tenths], 5, 5);   // SCREEN_WIDTH - DIGIT_WIDTH - 2
+        display_digit(digits[tenths], 5, 5); // SCREEN_WIDTH - DIGIT_WIDTH - 2
         display_digit(dot, 3, 5);
         display_digit(digits[seconds0], 2, 5); // SCREEN_WIDTH - 2 * (DIGIT_WIDTH + 2)
         if (seconds1 > 0)
@@ -184,7 +252,7 @@ void update_bitmap()
     }
 }
 
-void display_digit (uint16_t *digit, int num_bytes, int byte_offset)
+void display_digit(uint16_t *digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
@@ -235,18 +303,24 @@ void setup()
     init_clock();
     init_display();
 
-    // Clear display board
-    wipe_bitmap();
-    delay(500);
-
     // Set up display refresh timer
     Timer1.initialize(DISPLAY_REFRESH_MS);
     Timer1.attachInterrupt(update_display);
+
+    restart();
 }
 
 void loop()
 {
-    if (tick >= BITMAP_REFRESH_TICKS)
+    if (rf95.available())
+    {
+        check_for_RF_message(msgType, msgTime);
+    }
+    if (is_idle)
+    {
+        display_idle();
+    }
+    else if (tick >= BITMAP_REFRESH_TICKS)
     {
         update_clock();
         tick = 0;
