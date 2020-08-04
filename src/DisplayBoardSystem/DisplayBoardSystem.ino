@@ -20,9 +20,9 @@
 #define MSG_LENGTH 16
 
 // Display board parameters
-#define DISPLAY_REFRESH_MS 500 // Microseconds between display refreshes. Was originally 500 but I found 5000 reduced flickering?
-#define BITMAP_REFRESH_TICKS 100 // 1000 ticks (milliseconds) before display board updates
-#define BRIGHTNESS 1
+#define BRIGHTNESS 1  // Between 1 and 255
+#define DISPLAY_REFRESH_MS 500   // Microseconds between display refreshes
+#define BITMAP_REFRESH_TICKS 100 // 100 ticks (microseconds) between clock updates
 #define PANEL_WIDTH 32
 #define PANEL_HEIGHT 16
 #define SCREEN_WIDTH PANEL_WIDTH * 2
@@ -33,22 +33,21 @@
 #include "font.h"
 
 // Clock variables
-volatile unsigned short tick = 0;
-unsigned char tenths = 0;
-unsigned char seconds0 = 0;
-unsigned char seconds1 = 0;
-unsigned char minutes = 0;
+volatile unsigned long tick = 0;
+unsigned char last_minutes = -1, last_tens = -1, last_seconds = -1, last_coln = -1;
+bool is_idle = false;
 
-// RF variables 
+// RF variables
 char msgType;
 unsigned short msgTime;
 
+// Other misc. variables
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 uint8_t bitmap[256];
 RtcDS3231<TwoWire> rtcObject(Wire);
-SPISettings settings(4000000, MSBFIRST, SPI_MODE0); // TODO: Verify that this is correct?
+SPISettings settings(4000000, MSBFIRST, SPI_MODE0);
 byte scan_row = 0;
-bool is_idle = false;
+
 
 void init_clock()
 {
@@ -62,7 +61,8 @@ void init_clock()
 
 void init_display()
 {
-    memset(bitmap, 0xFF, 256);
+    // Initialise screen by wiping bitmap and setting IO pins
+    wipe_bitmap();
     pinMode(pin_a, OUTPUT);
     pinMode(pin_b, OUTPUT);
     pinMode(pin_sck, OUTPUT);
@@ -73,6 +73,7 @@ void init_display()
 
 void init_RF()
 {
+    // TODO: Currently, this prevents setup from completing - check with Bradley
     // Assign pins to RF module
     pinMode(RFM95_MISO, OUTPUT);
     pinMode(RFM95_MOSI, INPUT);
@@ -99,21 +100,22 @@ void RTCInterruptHandler()
 
 void wipe_bitmap()
 {
+    // Clear screen
     memset(bitmap, 0xFF, 256);
 }
 
 void restart()
 {
+    // Reset display board to start counting from 0.0 again
     wipe_bitmap();
     tick = 0;
-    tenths = 0;
-    seconds0 = 0;
-    seconds1 = 0;
-    minutes = 0;
+    last_minutes = last_tens = last_seconds = last_coln = -1;
+    is_idle = false;
 }
 
 bool check_for_RF_message(char &msgType, unsigned short &msgTime)
 {
+    // TODO: Will become outdated as Bradley continues work on RF communication code
     uint8_t buf[16];
     uint8_t len;
 
@@ -164,7 +166,6 @@ void update_display()
         bitmap + (scan_row + 4) * PANEL_HEIGHT,
         bitmap + (scan_row + 8) * PANEL_HEIGHT,
         bitmap + (scan_row + 12) * PANEL_HEIGHT};
-    // cli();
 
     SPI.beginTransaction(settings);
 
@@ -179,7 +180,6 @@ void update_display()
 
     SPI.endTransaction();
 
-    // sei();
 
     // Write to display board digital pins
     digitalWrite(pin_sck, HIGH); // Latch DMD shift register output
@@ -198,61 +198,68 @@ void update_display()
 
 void update_clock()
 {
-    // This function triggers every 0.1 seconds
-    // Update clock variables to reflect the new time, then update the bitmap
-    tenths++;
-    if (tenths >= 10)
-    {
-        tenths = 0;
-        seconds0++;
-    }
-    if (seconds0 >= 10)
-    {
-        seconds0 = 0;
-        seconds1++;
-    }
-    if (seconds1 >= 6)
-    {
-        seconds1 = 0;
-        minutes++;
-    }
-    if (minutes >= 10)
-    {
-        // 10 minutes has elapsed - default to idle screen since we can't display 10 minutes
-        display_idle();
-    }
-    else
-    {
-        // Update display with current time
-        update_bitmap();
-    }
-}
+    // TODO: Can this be cleaned up / written more concisely?
+    int total_seconds = tick >> 10;
 
-void update_bitmap()
-{
-    // Update the bitmap to reflect the current clock state
-    // Sorry for the magic numbers in this part of the code for digit locations
-    wipe_bitmap();
-    if (minutes > 0)
+    if (total_seconds < 60)
     {
-        display_digit(digits[seconds0], 5, 5);
-        display_digit(digits[seconds1], 3, 3);
-        display_digit(colon, 1, 3);
-        display_digit(digits[minutes], 0, 3);
-    }
-    else
-    {
-        display_digit(digits[tenths], 5, 5); // SCREEN_WIDTH - DIGIT_WIDTH - 2
-        display_digit(dot, 3, 5);
-        display_digit(digits[seconds0], 2, 5); // SCREEN_WIDTH - 2 * (DIGIT_WIDTH + 2)
-        if (seconds1 > 0)
+        int tenths = (10 * (tick & 0x3FF)) >> 10;
+        int tens = total_seconds / 10;
+        int seconds = total_seconds - tens * 10;
+
+        if (last_coln != 1)
         {
-            display_digit(digits[seconds1], 0, 3); // SCREEN_WIDTH - 3 * (DIGIT_WIDTH + 2)
+            display_digit_8(dot, 4, 5);
+            last_coln = 1;
+        }
+        if (tens > 0 && tens != last_tens)
+        {
+            display_digit_16(digits[tens], 0, 3);
+            last_tens = tens;
+        }
+        if (last_seconds != seconds)
+        {
+            display_digit_16(digits[seconds], 2, 5);
+            last_seconds = seconds;
+        }
+        display_digit_16(digits[tenths], 5, 5);
+    }
+    else if (total_seconds < 600)
+    {
+        int minutes = total_seconds / 60;
+        int seconds = total_seconds - minutes * 60;
+        int tens = seconds / 10;
+        seconds -= tens * 10;
+
+        if (last_coln != 2)
+        {
+            display_digit_8(colon, 2, 3);
+            last_coln = 2;
+        }
+        if (last_minutes != minutes)
+        {
+            display_digit_16(digits[minutes], 0, 3);
+            last_minutes = 0;
+        }
+        if (tens != last_tens)
+        {
+            display_digit_16(digits[tens], 3, 3);
+            last_tens = tens;
+        }
+
+        if (last_seconds != seconds)
+        {
+            display_digit_16(digits[seconds], 5, 5);
+            last_seconds = seconds;
         }
     }
+    else
+    {
+        is_idle = true;
+    }
 }
 
-void display_digit(uint16_t *digit, int num_bytes, int byte_offset)
+void display_digit_16(uint16_t *digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
@@ -288,8 +295,43 @@ void display_digit(uint16_t *digit, int num_bytes, int byte_offset)
     }
 }
 
+void display_digit_8(uint8_t *digit, int num_bytes, int byte_offset)
+{
+    // Instantiate the row and start byte, and define the bit masks to use later
+    unsigned char row;
+    unsigned char start_byte;
+    unsigned char mask1 = 0xFF >> byte_offset;
+    unsigned char mask2 = 0xFF << (8 - byte_offset);
+
+    // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
+    for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
+    {
+        // Reference to current line of digit for convenience
+        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+
+        // When calculating the row number, note that the display board considers all four panels side-by-side
+        // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
+        // index as such: 0, 2, 4, 6, 8, 10, ... , 30, 1, 3, 5, 7, 9, ... , 27, 29, 31
+        // The calculation for row below takes this into account
+        row = 2 * i;
+        if (i >= PANEL_HEIGHT)
+        {
+            row -= SCREEN_HEIGHT - 1;
+        }
+        start_byte = row * SCREEN_WIDTH_B + num_bytes;
+
+        // Set the 16 bits for this line in three steps, since the digit could be spread over three bytes
+        // Use bit masking to retain the existing contents of the byte where we don't need to overwrite it
+        // First byte - if the digit is offset by n relative to the current byte, write bits 1:8-n bits to this byte
+        bitmap[start_byte] = (bitmap[start_byte] & ~mask1) | (curr_line >> byte_offset & mask1);
+        // Second byte - write bits (9-n:end) to this byte
+        bitmap[start_byte + 1] = (bitmap[start_byte + 1] & ~mask2) | ((curr_line << (8 - byte_offset)) & mask2);
+    }
+}
+
 void display_idle()
 {
+    // Wipe the screen but light up the four corner LEDs, to signify that the screen is powered on but idling
     wipe_bitmap();
     bitmap[0] = 0b01111111;
     bitmap[7] = 0b11111110;
@@ -323,6 +365,5 @@ void loop()
     else if (tick >= BITMAP_REFRESH_TICKS)
     {
         update_clock();
-        tick = 0;
     }
 }
