@@ -1,4 +1,3 @@
-// screen /dev/cu.usbmodem14201 9600
 #include <SPI.h>
 #include <Wire.h>
 #include <RtcDS3231.h>
@@ -79,6 +78,7 @@ void init_RF()
     pinMode(RFM95_MOSI, INPUT);
     pinMode(RFM95_RST, OUTPUT);
     pinMode(RFM95_CS, OUTPUT);
+
     digitalWrite(RFM95_RST, LOW);
     pinMode(RFM95_RST, OUTPUT);
     delayMicroseconds(100);
