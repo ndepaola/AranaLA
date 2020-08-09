@@ -2,12 +2,11 @@
 #include <Wire.h>
 #include <RtcDS3231.h>
 #include <RH_RF95.h>
+#include "TimerOne.h"
 
-// screen /dev/cu.usbmodem14201 9600
-
-// display data
-#define pin_a   6
-#define pin_b   7
+// Pin definitions and RF parameters
+#define pin_a 6
+#define pin_b 7
 #define pin_sck 8
 #define pin_noe 9
 #define RFM95_SCK 13
@@ -17,330 +16,213 @@
 #define RFM95_RST 4
 #define RFM95_INT 3
 #define RF95_FREQ 433.0
-
 #define MSG_LENGTH 16
 
-RH_RF95 rf95(RFM95_CS, RFM95_INT);
+// Display board parameters
+#define BRIGHTNESS 1  // Between 1 and 255
+#define DISPLAY_REFRESH_MS 500   // Microseconds between display refreshes
+#define BITMAP_REFRESH_TICKS 100 // 100 ticks (microseconds) between clock updates
+#define PANEL_WIDTH 32
+#define PANEL_HEIGHT 16
+#define SCREEN_WIDTH PANEL_WIDTH * 2
+#define SCREEN_HEIGHT PANEL_HEIGHT * 2
+#define SCREEN_WIDTH_B SCREEN_WIDTH / 8
 
-byte scan_row;
-uint8_t bitmap[256];
-SPISettings settings(4000000, MSBFIRST, SPI_MODE0);
+// Import font from separate file
+#include "font.h"
 
-bool hold_zero = true;
-
-void init_display()
-{
-    memset(bitmap, 0xFF, 256);
-    pinMode(pin_a, OUTPUT);
-    pinMode(pin_b, OUTPUT);
-    pinMode(pin_sck, OUTPUT);
-    pinMode(pin_noe, OUTPUT); 
-    SPI.begin();
-}
-
-
-void setupRF()
-{
-    Serial.println("Being setting up pins for RFM95.");
-    pinMode(RFM95_MISO, OUTPUT); // default slave select pin for client mode 
-    pinMode(RFM95_MOSI, INPUT);
-    pinMode(RFM95_RST, OUTPUT);
-    pinMode(RFM95_CS, OUTPUT);
-    Serial.println("Finished setting up pins.");
-
-    Serial.println("Resetting RFM95 Module.");
-    // digitalWrite(RFM95_CS, LOW);
-    // digitalWrite(RFM95_RST, HIGH);
-    // delay(10);
-    // digitalWrite(RFM95_RST, LOW);
-    // Manual Reset
-    digitalWrite(RFM95_RST, LOW);
-    pinMode(RFM95_RST, OUTPUT);
-    delayMicroseconds(100);
-    pinMode(RFM95_RST, INPUT);
-    delay(5);
-    
-    
-    Serial.println("RFM95 Module reset.");
-
-    // while (!rf95.init());
-    if (!rf95.init()) {
-      Serial.println("init failed");
-      while(1);
-    }
-    Serial.println("RFM95 Module initialised!");
-
-    Serial.println("Set transmission power to 13 dBm.");
-    rf95.setTxPower(13, false);
-    Serial.println("Power set to 13 dBm.");
-}
-
-void setupSerial()
-{
-    Serial.begin(9600);
-    while (!Serial) {
-      continue; // Wait for Serial port to be available
-    }
-
-    Serial.println("Serial setup complete");
-    // Serial.println("Setup Complete");
-}
-
-
-// clock data
+// Clock variables
 volatile unsigned long tick = 0;
-unsigned long next_tenth = 0;
-unsigned long next_display = 0;
-RtcDS3231 <TwoWire> rtcObject(Wire);
+unsigned char last_minutes = -1, last_tens = -1, last_seconds = -1, last_coln = -1;
+bool is_idle = false;
+
+// RF variables
+char msgType;
+unsigned short msgTime;
+
+// Other misc. variables
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
+uint8_t bitmap[256];
+RtcDS3231<TwoWire> rtcObject(Wire);
+SPISettings settings(4000000, MSBFIRST, SPI_MODE0);
+byte scan_row = 0;
+
 
 void init_clock()
 {
     pinMode(2, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(2), RTCInterruptHandler, RISING);
     rtcObject.Begin();
+    // TODO: Check if this is exactly 1000 Hz or if it's actually 1024 Hz
     rtcObject.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
-    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);  
+    rtcObject.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
 }
 
-
-
-// RH_RF95 rf95(4, 3);
-
-// void init_RF()
-// {
-//     if (!rf95.init())
-//       Serial.println("init failed"); 
-
-//     rf95.setFrequency(433);
-// }
-
-// uint8_t buf[255];
-// uint8_t len;
-
-int last_minutes = -1, last_tens = -1, last_seconds = -1, last_coln = -1;
-
-void restart()
+void init_display()
 {
-    //Serial.println("restart clock!");
-    tick = 0;
-    last_minutes = last_tens = last_seconds = last_coln = -1;
-    next_tenth = 0;
-    next_display = 0;
-    memset(bitmap, 0xFF, 256);
+    // Initialise screen by wiping bitmap and setting IO pins
+    wipe_bitmap();
+    pinMode(pin_a, OUTPUT);
+    pinMode(pin_b, OUTPUT);
+    pinMode(pin_sck, OUTPUT);
+    digitalWrite(pin_noe, LOW);
+    pinMode(pin_noe, OUTPUT);
+    SPI.begin();
 }
 
-// uint8_t buf[255];
-// uint8_t len;
-
-char msgType;
-unsigned int msgTime;
-
-// screen /dev/cu.usbmodem14101
-bool check_for_RF_message(char &msgType, unsigned int &msgTime)
+void init_RF()
 {
-    uint8_t buf[16];
-    uint8_t len;
+    // TODO: Currently, this prevents setup from completing - check with Bradley
+    // Assign pins to RF module
+    pinMode(RFM95_MISO, OUTPUT);
+    pinMode(RFM95_MOSI, INPUT);
+    pinMode(RFM95_RST, OUTPUT);
+    pinMode(RFM95_CS, OUTPUT);
 
-    // Check if a message has been received 
-    if (rf95.recv(buf, &len))
-    {   
-        // Start measuring execution time
-        unsigned long current_micros = micros();
-
-        // Retrieve msgType and msgTime from the received message 
-        msgType = buf[0];
-        char systemTime[MSG_LENGTH-2];
-        for(int i=0; i<MSG_LENGTH-3; i++) {
-            if ((char) buf[i+2] == 'l') {
-                systemTime[i] = '\0';
-                break;
-            }
-            systemTime[i] = (char) buf[i+2];
-        }
-        msgTime = atoi(systemTime);
-
-        // Finish measuring execution time
-        current_micros = micros() - current_micros;
-
-        // Debugging prints
-        // Serial.println("Received a new message:");
-        // Serial.println("Execution time (microseconds)");
-        // Serial.println(current_micros);  
-        // Serial.println("Message type");
-        // Serial.println(msgType);
-        // Serial.println("Message time");
-        // Serial.println(msgTime);
-        // Serial.println("");
-        if (msgType == '0')
-        {
-            Serial.println("Started Race!");
-            hold_zero = false;
-            restart();
-        }
-        else if (msgType == '1')
-        {
-            Serial.println("Reset received!");
-            hold_zero = true;
-            restart();
-            update_display();
-        }
-        else
-        {
-            Serial.println("Error occured in transmission.");
-        }
-
-        return true;
-    } else {
-        return false;
-    }     
-}
-
-// void check_for_RF_message()
-// {
-//     uint8_t buf[16];
-//     uint8_t len;
-//     if (rf95.recv(buf, &len))
-//     {
-//         // Serial.println((char*)buf);
-//         // Serial.println(other);
-//         // Serial.println("Received.");
-//         // test
-//         // restart();
-
-//         unsigned long current_micros = micros();
-
-//         // Retrieve msgType and msgTime from the received message 
-//         msgType = buf[0];
-//         char systemTime[MSG_LENGTH-2];
-//         for(int i=0; i<MSG_LENGTH-3; i++) {
-//             if ((char) buf[i+2] == 'l') {
-//                 systemTime[i] = '\0';
-//                 break;
-//             }
-//             systemTime[i] = (char) buf[i+2];
-//         }
-//         msgTime = atoi(systemTime);
-
-//         // Finish measuring execution time
-//         current_micros = micros() - current_micros;
-
-//         if (buf[0] == 0)
-//         {
-//             Serial.println("Started Race!");
-//             hold_zero = false;
-//             restart();
-//         }
-//         else if (buf[0] == 1)
-//         {
-//             Serial.println("Reset received!");
-//             hold_zero = true;
-//             restart();
-//             update_display();
-//         }
-//     }
-//     // if (rf95.recv(buf, &len))
-//     // restart();
-        
-// }
-
-// void check_for_RF_message()
-// {
-//     if (rf95.recv(buf, &len))
-//         restart();
-// }
-
-void setup()
-{ 
-    // Serial.begin(9600);
-    // while (!Serial) ; // Wait for serial port to be available
-  
-    // init_RF();
-    setupSerial();
-    delay(1000);
-    setupRF();
-
-    init_display();
-    init_clock();
-    update_bitmap(0);
-    update_display();
-    update_display();
-    update_display();
-    update_display();
-
-    //Serial.println("init successful");
+    digitalWrite(RFM95_RST, LOW);
+    pinMode(RFM95_RST, OUTPUT);
+    delayMicroseconds(100);
+    pinMode(RFM95_RST, INPUT);
+    delay(5);
+    // Pause until RFM96W has initialised properly
+    if (!rf95.init())
+    {
+        while (1);
+    }
+    rf95.setTxPower(13, false);
 }
 
 void RTCInterruptHandler()
 {
-	  tick++;
+    // Interrupt triggers every 0.001 seconds (from 1kHz square wave of DS3231)
+    tick++;
+}
+
+void wipe_bitmap()
+{
+    // Clear screen
+    memset(bitmap, 0xFF, 256);
+}
+
+void restart()
+{
+    // Reset display board to start counting from 0.0 again
+    wipe_bitmap();
+    tick = 0;
+    last_minutes = last_tens = last_seconds = last_coln = -1;
+    is_idle = false;
+}
+
+bool check_for_RF_message(char &msgType, unsigned short &msgTime)
+{
+    // TODO: Will become outdated as Bradley continues work on RF communication code
+    uint8_t buf[16];
+    uint8_t len;
+
+    // Check if a message has been received
+    if (rf95.recv(buf, &len))
+    {
+        // Retrieve msgType and msgTime from the received message
+        msgType = buf[0];
+        char systemTime[MSG_LENGTH - 2];
+        for (int i = 0; i < MSG_LENGTH - 3; i++)
+        {
+            if ((char)buf[i + 2] == 'l')
+            {
+                systemTime[i] = '\0';
+                break;
+            }
+            systemTime[i] = (char)buf[i + 2];
+        }
+        msgTime = atoi(systemTime);
+
+        if (msgType == '1')
+        {
+            // Race started
+            is_idle = false;
+            restart();
+        }
+        else if (msgType == '0')
+        {
+            // Reset message received
+            is_idle = true;
+            restart();
+        }
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 void update_display()
-{      
-    next_display = tick + 1;
-    const int rowsize = 16;
-    
-	  uint8_t * rows[4] =
-	  {
-		    bitmap + (scan_row +  0) * rowsize,
-		    bitmap + (scan_row +  4) * rowsize,
-		    bitmap + (scan_row +  8) * rowsize,
-		    bitmap + (scan_row + 12) * rowsize,
-	  };
+{
+    // Update the display board
+    // This only shows one of four interleaved rows at a time, so it's attached to a 5ms timer interrupt
+    // Scanning out 4 interleaved rows
+    volatile uint8_t *rows[4] = {
+        bitmap + (scan_row + 0) * PANEL_HEIGHT,
+        bitmap + (scan_row + 4) * PANEL_HEIGHT,
+        bitmap + (scan_row + 8) * PANEL_HEIGHT,
+        bitmap + (scan_row + 12) * PANEL_HEIGHT};
 
-    // rf95.DisableInterrupt();
-    cli();
     SPI.beginTransaction(settings);
 
-	  for (int i = 0; i < rowsize; i++) 
-	  {
-		    SPI.transfer(*(rows[3] ++));
-		    SPI.transfer(*(rows[2] ++));
-		    SPI.transfer(*(rows[1] ++));
-		    SPI.transfer(*(rows[0] ++));
-	  }
+    // Send out interleaved data for 4 rows at a time
+    for (int i = 0; i < PANEL_HEIGHT; i++)
+    {
+        SPI.transfer(*(rows[3]++));
+        SPI.transfer(*(rows[2]++));
+        SPI.transfer(*(rows[1]++));
+        SPI.transfer(*(rows[0]++));
+    }
 
     SPI.endTransaction();
-    // rf95.EnableInterrupt();
-    sei();
 
-	  digitalWrite(pin_noe, LOW);
-	  digitalWrite(pin_sck, HIGH);
-	  digitalWrite(pin_sck, LOW);
-	  digitalWrite(pin_a, scan_row & 0x01);
-	  digitalWrite(pin_b, scan_row & 0x02);
 
-	  scan_row = (scan_row + 1) % 4;
-	  analogWrite(pin_noe, 255);
+    // Write to display board digital pins
+    digitalWrite(pin_sck, HIGH); // Latch DMD shift register output
+    digitalWrite(pin_sck, LOW);  // (Deliberately left as digitalWrite to ensure decent latching time)
+
+    digitalWrite(pin_a, scan_row & 0x01);
+    digitalWrite(pin_b, scan_row & 0x02);
+
+    // Update scan row for next call to this function
+    scan_row = (scan_row + 1) % 4;
+
+    // Set display board brightness
+    // TODO: Control brightness with a dial on the display board
+    analogWrite(pin_noe, BRIGHTNESS);
 }
 
-
-void update_bitmap(unsigned long time)
-{   
-    int total_seconds = time >> 10;
+void update_clock()
+{
+    // TODO: Can this be cleaned up / written more concisely?
+    int total_seconds = tick >> 10;
 
     if (total_seconds < 60)
     {
-        int tenths = (10 * (time & 0x3FF)) >> 10;
+        int tenths = (10 * (tick & 0x3FF)) >> 10;
         int tens = total_seconds / 10;
         int seconds = total_seconds - tens * 10;
 
         if (last_coln != 1)
         {
-            dot_coln (36,4,1);
+            display_digit_8(dot, 4, 5);
             last_coln = 1;
         }
         if (tens > 0 && tens != last_tens)
         {
-            display_num(32, 2, tens); 
+            display_digit_16(digits[tens], 0, 3);
             last_tens = tens;
-        } 
+        }
         if (last_seconds != seconds)
         {
-            display_num(34, 4, seconds);
+            display_digit_16(digits[seconds], 2, 5);
             last_seconds = seconds;
         }
-        display_num(37, 6, tenths);
+        display_digit_16(digits[tenths], 5, 5);
     }
     else if (total_seconds < 600)
     {
@@ -351,126 +233,137 @@ void update_bitmap(unsigned long time)
 
         if (last_coln != 2)
         {
-            dot_coln(34,3,2);
+            display_digit_8(colon, 2, 3);
             last_coln = 2;
         }
         if (last_minutes != minutes)
         {
-            display_num(32, 2, minutes);
+            display_digit_16(digits[minutes], 0, 3);
             last_minutes = 0;
         }
         if (tens != last_tens)
         {
-            display_num(35, 4, tens);
+            display_digit_16(digits[tens], 3, 3);
             last_tens = tens;
         }
 
         if (last_seconds != seconds)
         {
-            display_num(37, 6, seconds);
+            display_digit_16(digits[seconds], 5, 5);
             last_seconds = seconds;
         }
     }
     else
-        memset(bitmap, 0xFF, 256);
-            
-    unsigned long count =  (10 * time) >> 10;      
-    next_tenth = (((count + 1) << 10) + 9) / 10; 
+    {
+        is_idle = true;
+    }
+}
+
+void display_digit_16(uint16_t *digit, int num_bytes, int byte_offset)
+{
+    // Instantiate the row and start byte, and define the bit masks to use later
+    unsigned char row;
+    unsigned char start_byte;
+    unsigned char mask1 = 0xFFFF >> (DIGIT_WIDTH - (8 - byte_offset));
+    unsigned char mask2 = 0xFFFF << (8 - byte_offset);
+
+    // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
+    for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
+    {
+        // Reference to current line of digit for convenience
+        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+
+        // When calculating the row number, note that the display board considers all four panels side-by-side
+        // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
+        // index as such: 0, 2, 4, 6, 8, 10, ... , 30, 1, 3, 5, 7, 9, ... , 27, 29, 31
+        // The calculation for row below takes this into account
+        row = 2 * i;
+        if (i >= PANEL_HEIGHT)
+        {
+            row -= SCREEN_HEIGHT - 1;
+        }
+        start_byte = row * SCREEN_WIDTH_B + num_bytes;
+
+        // Set the 16 bits for this line in three steps, since the digit could be spread over three bytes
+        // Use bit masking to retain the existing contents of the byte where we don't need to overwrite it
+        // First byte - if the digit is offset by n relative to the current byte, write bits 1:8-n bits to this byte
+        bitmap[start_byte] = (bitmap[start_byte] & ~mask1) | (curr_line >> (8 + byte_offset) & mask1);
+        // Second byte - write bits n+1:n+8 to this byte
+        bitmap[start_byte + 1] = ((curr_line >> byte_offset));
+        // Third byte - write bits (n+9:end) to this byte
+        bitmap[start_byte + 2] = (bitmap[start_byte + 2] & ~mask2) | ((curr_line << (8 - byte_offset)) & mask2);
+    }
+}
+
+void display_digit_8(uint8_t *digit, int num_bytes, int byte_offset)
+{
+    // Instantiate the row and start byte, and define the bit masks to use later
+    unsigned char row;
+    unsigned char start_byte;
+    unsigned char mask1 = 0xFF >> byte_offset;
+    unsigned char mask2 = 0xFF << (8 - byte_offset);
+
+    // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
+    for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
+    {
+        // Reference to current line of digit for convenience
+        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+
+        // When calculating the row number, note that the display board considers all four panels side-by-side
+        // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
+        // index as such: 0, 2, 4, 6, 8, 10, ... , 30, 1, 3, 5, 7, 9, ... , 27, 29, 31
+        // The calculation for row below takes this into account
+        row = 2 * i;
+        if (i >= PANEL_HEIGHT)
+        {
+            row -= SCREEN_HEIGHT - 1;
+        }
+        start_byte = row * SCREEN_WIDTH_B + num_bytes;
+
+        // Set the 16 bits for this line in three steps, since the digit could be spread over three bytes
+        // Use bit masking to retain the existing contents of the byte where we don't need to overwrite it
+        // First byte - if the digit is offset by n relative to the current byte, write bits 1:8-n bits to this byte
+        bitmap[start_byte] = (bitmap[start_byte] & ~mask1) | (curr_line >> byte_offset & mask1);
+        // Second byte - write bits (9-n:end) to this byte
+        bitmap[start_byte + 1] = (bitmap[start_byte + 1] & ~mask2) | ((curr_line << (8 - byte_offset)) & mask2);
+    }
+}
+
+void display_idle()
+{
+    // Wipe the screen but light up the four corner LEDs, to signify that the screen is powered on but idling
+    wipe_bitmap();
+    bitmap[0] = 0b01111111;
+    bitmap[7] = 0b11111110;
+    bitmap[248] = 0b01111111;
+    bitmap[255] = 0b11111110;
+}
+
+void setup()
+{
+    // Initialise clock and display
+    init_clock();
+    init_display();
+
+    // Set up display refresh timer
+    Timer1.initialize(DISPLAY_REFRESH_MS);
+    Timer1.attachInterrupt(update_display);
+
+    restart();
 }
 
 void loop()
 {
-   if (rf95.available())
-       if (check_for_RF_message(msgType, msgTime)) {
-            // a message has been received 
-            // print out the received message 
-            Serial.println("Message type");
-            Serial.println(msgType);
-            Serial.println("Message time");
-            Serial.println(msgTime);
-        }
-    
-    if (!hold_zero)
+    if (rf95.available())
     {
-        if (tick >= next_tenth)
-            update_bitmap(tick);
-        
-        if (tick > next_display)
-            update_display();
+        check_for_RF_message(msgType, msgTime);
     }
-   
-}
-
-const uint16_t font2[10][28] =
-{  
-    { 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFE7F, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0xFE7F, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0 },  
-	  { 0x07C0, 0x0FC0, 0x1FC0, 0x3FC0, 0x3FC0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x03C0, 0x3FFC, 0x3FFC, 0x3FFC, 0x3FFC },
-	  { 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0x000F, 0x000F, 0x000F, 0x000F, 0x001F, 0x003E, 0x007C, 0x00F8, 0x01F0, 0x03E0, 0x07C0, 0x0F80, 0x1F00, 0x3E00, 0x7C00, 0xF800, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF },
-	  { 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0xFC3E, 0xF81F, 0xF00F, 0xF00F, 0x000F, 0x000F, 0x001F, 0x003E, 0x0FFC, 0x0FF8, 0x0FF8, 0x0FFC, 0x003E, 0x001F, 0x000F, 0x000F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0 },
-	  { 0x00FC, 0x00FC, 0x01FC, 0x01FC, 0x03FC, 0x03FC, 0x07BC, 0x07BC, 0x0F3C, 0x0F3C, 0x1E3C, 0x1E3C, 0x3C3C, 0x3C3C, 0x783C, 0x783C, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x003C, 0x003C, 0x003C, 0x003C, 0x003C, 0x003C, 0x003C, 0x003C },
-	  { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xF000, 0xF000, 0xF000, 0xF000, 0xF000, 0xF000, 0xF000, 0xF000, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF, 0x000F, 0x000F, 0x000F, 0x000F, 0x000F, 0xF00F, 0xF00F, 0xF00F, 0xFFFF, 0xFFFE, 0x3FFC, 0x1FF8 },
-	  { 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF000, 0xF000, 0xF800, 0xFC00, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0xFFFF, 0x7FFE, 0x3FFC, 0x1FF8 },
-	  { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x000F, 0x000F, 0x000F, 0x000F, 0x000F, 0x000F, 0x000F, 0x001F, 0x003C, 0x0078, 0x00F0, 0x01E0, 0x03C0, 0x0780, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00, 0x0F00 },
-	  { 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0x3FFC, 0x1FF8, 0x1FF8, 0x3FFC, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0xFFFF, 0x7FFE, 0x3FFC, 0x1FF8 },
-    { 0x1FF8, 0x3FFC, 0x7FFE, 0xFFFF, 0xFC3F, 0xF81F, 0xF00F, 0xF00F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0x001f, 0x000F, 0x000F, 0x000F, 0xF00F, 0xF00F, 0xF81F, 0xFC3F, 0xFFFF, 0x7FFE, 0x3FFC, 0x1FF8 }
-};
-
-const uint8_t dot[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3C, 0x3C, 0x3C, 0x3C};
-const uint8_t colon[] ={ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3C, 0x3C, 0x3C, 0x3C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3C, 0x3C, 0x3C, 0x3C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-
-
-void display_num(unsigned int bX, unsigned int set, unsigned int number)
-{
-  // Code to deal with offset if it doesn't fall at start of a bit array
-  int opp = 8 - set;
-  int origL = (0xFF >> set);
-  int origR = (0xFF << opp);
-
-  for (int i = bX - 24; i < 256; i = i + 8)
-  {
-      bitmap[i + 0] |= origL;
-      bitmap[i + 1] |= 0xFF;
-      bitmap[i + 2] |= origR;
-  }
-
-  for (int i = 0; i < 14; i++)
-  {
-      const uint16_t* font = font2[number];
-                  
-      bitmap[bX + 0 + 16 * i] &= ~(font[i]>>(8+set));    
-      bitmap[bX + 1 + 16 * i] &= ~(font[i]>>set);
-      bitmap[bX + 2 + 16 * i] &= ~(font[i]<<opp);
-      
-      bitmap[bX + 0 + 16 * i - 24] &= ~(font[i+14]>>(8+set));
-      bitmap[bX + 1 + 16 * i - 24] &= ~(font[i+14]>>set);
-      bitmap[bX + 2 + 16 * i - 24] &= ~(font[i+14]<<opp);
-  }
-}
-
-void dot_coln (unsigned int bX, unsigned int set, unsigned int typer) 
-{
-    int opp = 8-set;
-    int origL = (0XFF >> set); 
-    int origR = (0XFF << (7-set));
-  
-    for (int i=bX-24; i<256; i=i+8)
+    if (is_idle)
     {
-        bitmap[i] |= origL; 
-        bitmap[i+1] |=  origR;
+        display_idle();
     }
-
-    const uint8_t* font;
-    if (typer == 1)  
-        font = dot;
-    else
-        font = colon;
-                               
-    for (int i =0; i<14; i++)
+    else if (tick >= BITMAP_REFRESH_TICKS)
     {
-        bitmap[bX + 0 + 16 * i]&= ~(font[i]>>(set)); 
-        bitmap[bX + 1 + 16 * i]&= ~(font[i]<<opp);  
-        
-        bitmap[bX + 0 + 16 * i - 24]&= ~(font[i+14]>>(set)); 
-        bitmap[bX + 1 + 16 * i - 24]&= ~(font[i+14]<<opp);                       
-   }
+        update_clock();
+    }
 }
