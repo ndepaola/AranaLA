@@ -259,19 +259,21 @@ void update_clock()
     }
 }
 
-void display_digit_16(uint16_t *digit, int num_bytes, int byte_offset)
+void display_digit_16(uint16_t* digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
     unsigned char start_byte;
     unsigned char mask1 = 0xFFFF >> (DIGIT_WIDTH - (8 - byte_offset));
     unsigned char mask2 = 0xFFFF << (8 - byte_offset);
+    uint16_t curr_line;
 
     // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
     for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
     {
         // Reference to current line of digit for convenience
-        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+        // uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+        curr_line = pgm_read_word(&(digit[i - DIGIT_HEIGHT_OFFSET]));
 
         // When calculating the row number, note that the display board considers all four panels side-by-side
         // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
@@ -295,19 +297,20 @@ void display_digit_16(uint16_t *digit, int num_bytes, int byte_offset)
     }
 }
 
-void display_digit_8(uint8_t *digit, int num_bytes, int byte_offset)
+void display_digit_8(uint8_t* digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
     unsigned char start_byte;
     unsigned char mask1 = 0xFF >> byte_offset;
     unsigned char mask2 = 0xFF << (8 - byte_offset);
+    uint8_t curr_line;
 
     // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
     for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
     {
         // Reference to current line of digit for convenience
-        uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+        curr_line = pgm_read_word(&(digit[i - DIGIT_HEIGHT_OFFSET]));
 
         // When calculating the row number, note that the display board considers all four panels side-by-side
         // for bitmap memory purposes. Therefore, to index in the board's rows top to bottom, you need to
