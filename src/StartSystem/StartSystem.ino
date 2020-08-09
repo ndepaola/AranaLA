@@ -1,230 +1,115 @@
-#include <Wire.h>
-//#include <RtcDS3231.h>
-#include "limits.h"
-#include <stdint.h>
-#include <stdio.h>
-#include "SD.h"
-#include <SPI.h>
-#include <RH_RF95.h>
-#include <RHSoftwareSPI.h>
+// screen /dev/cu.usbmodem14201
+#include <AranaSend.h>
+
+#define DS3231_INT 2
 
 #define RFM95_SCK 13
 #define RFM95_MISO 12
 #define RFM95_MOSI 11
-#define RFM95_CS 4
-#define RFM95_RST 5
+#define RFM95_CS 10
+#define RFM95_RST 9
 #define RFM95_INT 3
 #define RF95_FREQ 433.0
-#define MSG_LENGTH 16
+#define MSG_LENGTH 8
 
-#define SD_CS 6
+#define SD_CS 8
 
 // Define Button pins
 // #define START_BUTTON 45
-// #define SYNC_BUTTON 23
+// #define RESET_BUTTON 23
 
 // #define LED 44
-#define START_BUTTON 7
-#define SYNC_BUTTON 8
+#define START_BUTTON 5
+#define RESET_BUTTON 4
 
-#define LED 9
+#define START_LED 1
+#define RESET_LED 0
 
-unsigned long long off = ULONG_MAX;
+#define LED 6
 
-volatile unsigned long long milliSeconds = millis();
+unsigned long off = ULONG_MAX;
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
-File file;
+// DS3231M_Class DS3231M; // Create an instance of the DS3231M
 
-bool falseStart = false;
+RtcDS3231<TwoWire> rtc(Wire);
 
-void setupRF()
+bool false_start = false;
+
+unsigned long tick = 0;
+
+AranaSend rflib(RFM95_MISO, RFM95_MOSI, RFM95_RST, RFM95_CS, SD_CS, LED);
+
+void RTCInterruptHandler()
 {
-    Serial.println("Being setting up pins for RFM95.");
-    pinMode(RFM95_MISO, OUTPUT); // default slave select pin for client mode 
-    pinMode(RFM95_MOSI, INPUT);
-    pinMode(RFM95_RST, OUTPUT);
-    pinMode(RFM95_CS, OUTPUT);
-    Serial.println("Finished setting up pins.");
-
-    Serial.println("Resetting RFM95 Module.");
-    // digitalWrite(RFM95_CS, LOW);
-    // digitalWrite(RFM95_RST, HIGH);
-    // delay(10);
-    // digitalWrite(RFM95_RST, LOW);
-    // Manual Reset
-    digitalWrite(RFM95_RST, LOW);
-    pinMode(RFM95_RST, OUTPUT);
-    delayMicroseconds(100);
-    pinMode(RFM95_RST, INPUT);
-    delay(5);
-    
-    
-    Serial.println("RFM95 Module reset.");
-
-    // while (!rf95.init());
-    if (!rf95.init()) {
-      Serial.println("init failed");
-      while(1);
-    }
-    Serial.println("RFM95 Module initialised!");
-
-    Serial.println("Set transmission power to 13 dBm.");
-    rf95.setTxPower(13, false);
-    Serial.println("Power set to 13 dBm.");
+    tick++;
+    //   Serial.println(tick);
 }
 
-void setupSerial()
+void setupClock()
 {
-    Serial.begin(9600);
-    while (!Serial) {
-      continue; // Wait for Serial port to be available
-    }
+    pinMode(DS3231_INT, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(DS3231_INT), RTCInterruptHandler, RISING);
+    rtc.Begin();
+    rtc.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
+    rtc.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
+    // rtc.SetSquareWavePinClockFrequency(DS3231Sq);
 
-    Serial.println("Serial setup complete");
-    // Serial.println("Setup Complete");
-}
-
-void setupSD()
-{
-    //Serial.println("Initializing SD card...");
-    digitalWrite(RFM95_CS, HIGH);
-    delay(10);
-
-    pinMode(SD_CS, OUTPUT);
-
-    digitalWrite(SD_CS, LOW);
-
-    delay(20);
-
-    while (!SD.begin(SD_CS));
-
-    delay(1000);
-
-    file = SD.open("data.csv", FILE_WRITE);
-    if (file)
-    {        
-        // RtcDateTime dt = rtcObject.GetDateTime();
-        // char datestring[25];
-        // // char datestring[25] = {'Time of Start,False Start'};
-        // // snprintf_P(datestring, sizeof(datestring), PSTR("%02u/%02u/%04u %02u:%02u:%02u"), dt.Day(), dt.Month(), dt.Year(), dt.Hour(), dt.Minute(), dt.Second());
-        // snprintf_P(datestring, sizeof(datestring), PSTR("Time of Start,False Start"));
-        // Serial.println(datestring);    
-        // file.println(datestring);
-        // file.println("Time of Start,False Start");
-        // file.println(milliSeconds);
-
-        // String heading = "Time of Start,False Start";
-        // int heading_len = heading.length() + 1;
-        // char char_array[heading_len];
-        // heading.toCharArray(char_array, heading_len);
-        // file.println(heading);
-        file.println("Time of Start,False Start");
-        // file.flush();
-        file.close();
-        // Serial.println("Time of Start,False Start");
-    }
-
-    
-
-    delay(20);
-
-    digitalWrite(SD_CS, HIGH);
-
-    delay(10);
-    digitalWrite(RFM95_CS, LOW);
+    // pinMode(DS3231_INT, INPUT_PULLUP);
+    // attachInterrupt(digitalPinToInterrupt(DS3231_INT), RTCInterruptHandler, RISING);
+    // while (!DS3231M.begin())
+    // DS3231M.begin();
+    // DS3231M.
+    // rtc.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
 }
 
 void setup()
 {
+    // Setup serial and RF communications
+    rflib.setup_serial();
+    rflib.setup_RF(rf95);
+    rflib.setup_SD();
+
     pinMode(START_BUTTON, INPUT);
-    pinMode(SYNC_BUTTON, INPUT);
+    pinMode(RESET_BUTTON, INPUT);
+    pinMode(START_LED, OUTPUT);
+    pinMode(RESET_LED, OUTPUT);
     pinMode(LED, OUTPUT);
     // pinMode(LED_BUILTIN, OUTPUT);
 
-    digitalWrite(LED, LOW);
+    digitalWrite(START_LED, LOW);
+    digitalWrite(RESET_LED, LOW);
+    // digitalWrite(LED, LOW);
     // digitalWrite(LED_BUILTIN, HIGH);
     // delay(1000);
     // digitalWrite(LED_BUILTIN, LOW);
 
-    setupSerial();
+    // setupClock();
+    // setupSD();
 
-    delay(1000);
-
-    setupRF();
-
-    setupSD();
-
-    Serial.println("Setup Complete");
-}
-
-
-
-
-
-void writeToSD(unsigned long now)
-{
-    digitalWrite(SD_CS, LOW);
-
-    // SD.begin(SD_CS);
-
-    file = SD.open("data.csv", FILE_WRITE);
-
-    file.println(now); // record to SD card    
-    // file.flush();
-
-    file.close();
-
-    delay(20);
-    digitalWrite(SD_CS, HIGH);
-}
-
-// screen /dev/cu.usbmodem14201
-void SendRFMessage(int msgType)
-{
-    unsigned long now = milliSeconds;
-    char msg[MSG_LENGTH] = "";
-    sprintf(msg, "%d %ul", msgType, millis());
-    // char msg[] = "Hello";
-
-    digitalWrite(LED, HIGH);
-    // digitalWrite(LED_BUILTIN, HIGH);
-    
-    Serial.println("About to transmit message.");
-
-    rf95.send((const uint8_t*)&msg, sizeof(msg)); // tell display board  
-    rf95.waitPacketSent();
-
-    Serial.println("Message sent!");
-//    delay(1000);
-//    digitalWrite(LED, LOW);
-
-    writeToSD((char*) msg);
-
-    off = now + 1000;
-    Serial.println(msg);
+    // Serial.println("Setup Complete");
+    Serial.println("Start system: Finished setup.\n");
 }
 
 void loop()
 {
-    milliSeconds = millis();
-
-    if (digitalRead(START_BUTTON) == HIGH && off == ULONG_MAX){
-        SendRFMessage(0);
-    }
-    else if (digitalRead(SYNC_BUTTON) == HIGH && off == ULONG_MAX)
+    if (digitalRead(START_BUTTON) == HIGH && off == ULONG_MAX)
     {
-        SendRFMessage(1);
+        rflib.send_RF_message(rf95, 1);
+        // digitalWrite(START_LED, HIGH);
+        off = millis() + 1000;
     }
-
-
-
-    if (milliSeconds > off)
+    else if (digitalRead(RESET_BUTTON) == HIGH && off == ULONG_MAX)
     {
-        //Serial.println(" turn off");
-        digitalWrite(LED, LOW);
-        // digitalWrite(LED_BUILTIN, LOW);
+        rflib.send_RF_message(rf95, 0);
+        // digitalWrite(RESET_LED, HIGH);
+        off = millis() + 1000;
+    }
+    if (millis() > off)
+    {
+        digitalWrite(START_LED, LOW);
+        digitalWrite(RESET_LED, LOW);
         off = ULONG_MAX;
     }
 }

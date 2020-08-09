@@ -1,8 +1,6 @@
-#include <SPI.h>
-#include <Wire.h>
-#include <RtcDS3231.h>
-#include <RH_RF95.h>
+#include <avr/pgmspace.h> // For PROGMEM access
 #include "TimerOne.h"
+#include <AranaReceive.h>
 
 // Pin definitions and RF parameters
 #define pin_a 6
@@ -19,7 +17,7 @@
 #define MSG_LENGTH 16
 
 // Display board parameters
-#define BRIGHTNESS 1  // Between 1 and 255
+#define BRIGHTNESS 1             // Between 1 and 255
 #define DISPLAY_REFRESH_MS 500   // Microseconds between display refreshes
 #define BITMAP_REFRESH_TICKS 100 // 100 ticks (microseconds) between clock updates
 #define PANEL_WIDTH 32
@@ -38,7 +36,7 @@ bool is_idle = false;
 
 // RF variables
 char msgType;
-unsigned short msgTime;
+unsigned int msgTime;
 
 // Other misc. variables
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
@@ -47,6 +45,7 @@ RtcDS3231<TwoWire> rtcObject(Wire);
 SPISettings settings(4000000, MSBFIRST, SPI_MODE0);
 byte scan_row = 0;
 
+AranaReceive rflib(RFM95_MISO, RFM95_MOSI, RFM95_RST, RFM95_CS);
 
 void init_clock()
 {
@@ -70,28 +69,6 @@ void init_display()
     SPI.begin();
 }
 
-void init_RF()
-{
-    // TODO: Currently, this prevents setup from completing - check with Bradley
-    // Assign pins to RF module
-    pinMode(RFM95_MISO, OUTPUT);
-    pinMode(RFM95_MOSI, INPUT);
-    pinMode(RFM95_RST, OUTPUT);
-    pinMode(RFM95_CS, OUTPUT);
-
-    digitalWrite(RFM95_RST, LOW);
-    pinMode(RFM95_RST, OUTPUT);
-    delayMicroseconds(100);
-    pinMode(RFM95_RST, INPUT);
-    delay(5);
-    // Pause until RFM96W has initialised properly
-    if (!rf95.init())
-    {
-        while (1);
-    }
-    rf95.setTxPower(13, false);
-}
-
 void RTCInterruptHandler()
 {
     // Interrupt triggers every 0.001 seconds (from 1kHz square wave of DS3231)
@@ -111,49 +88,6 @@ void restart()
     tick = 0;
     last_minutes = last_tens = last_seconds = last_coln = -1;
     is_idle = false;
-}
-
-bool check_for_RF_message(char &msgType, unsigned short &msgTime)
-{
-    // TODO: Will become outdated as Bradley continues work on RF communication code
-    uint8_t buf[16];
-    uint8_t len;
-
-    // Check if a message has been received
-    if (rf95.recv(buf, &len))
-    {
-        // Retrieve msgType and msgTime from the received message
-        msgType = buf[0];
-        char systemTime[MSG_LENGTH - 2];
-        for (int i = 0; i < MSG_LENGTH - 3; i++)
-        {
-            if ((char)buf[i + 2] == 'l')
-            {
-                systemTime[i] = '\0';
-                break;
-            }
-            systemTime[i] = (char)buf[i + 2];
-        }
-        msgTime = atoi(systemTime);
-
-        if (msgType == '1')
-        {
-            // Race started
-            is_idle = false;
-            restart();
-        }
-        else if (msgType == '0')
-        {
-            // Reset message received
-            is_idle = true;
-            restart();
-        }
-        return true;
-    }
-    else
-    {
-        return false;
-    }
 }
 
 void update_display()
@@ -179,7 +113,6 @@ void update_display()
     }
 
     SPI.endTransaction();
-
 
     // Write to display board digital pins
     digitalWrite(pin_sck, HIGH); // Latch DMD shift register output
@@ -255,11 +188,11 @@ void update_clock()
     }
     else
     {
-        is_idle = true;
+        display_idle();
     }
 }
 
-void display_digit_16(uint16_t* digit, int num_bytes, int byte_offset)
+void display_digit_16(uint16_t *digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
@@ -271,8 +204,7 @@ void display_digit_16(uint16_t* digit, int num_bytes, int byte_offset)
     // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
     for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
     {
-        // Reference to current line of digit for convenience
-        // uint16_t curr_line = digit[i - DIGIT_HEIGHT_OFFSET];
+        // Read the current line from PROGMEM
         curr_line = pgm_read_word(&(digit[i - DIGIT_HEIGHT_OFFSET]));
 
         // When calculating the row number, note that the display board considers all four panels side-by-side
@@ -297,7 +229,7 @@ void display_digit_16(uint16_t* digit, int num_bytes, int byte_offset)
     }
 }
 
-void display_digit_8(uint8_t* digit, int num_bytes, int byte_offset)
+void display_digit_8(uint8_t *digit, int num_bytes, int byte_offset)
 {
     // Instantiate the row and start byte, and define the bit masks to use later
     unsigned char row;
@@ -309,7 +241,7 @@ void display_digit_8(uint8_t* digit, int num_bytes, int byte_offset)
     // Write, line-by-line, the specified digit to the display board, at the given offset from the left side of the board
     for (int i = DIGIT_HEIGHT_OFFSET; i < DIGIT_HEIGHT + DIGIT_HEIGHT_OFFSET; ++i)
     {
-        // Reference to current line of digit for convenience
+        // Read the current line from PROGMEM
         curr_line = pgm_read_word(&(digit[i - DIGIT_HEIGHT_OFFSET]));
 
         // When calculating the row number, note that the display board considers all four panels side-by-side
@@ -335,15 +267,25 @@ void display_digit_8(uint8_t* digit, int num_bytes, int byte_offset)
 void display_idle()
 {
     // Wipe the screen but light up the four corner LEDs, to signify that the screen is powered on but idling
-    wipe_bitmap();
-    bitmap[0] = 0b01111111;
-    bitmap[7] = 0b11111110;
-    bitmap[248] = 0b01111111;
-    bitmap[255] = 0b11111110;
+    // Wrapped in if statement to ensure that consecutive calls to this function don't continuously wipe
+    // the board and relight LEDs
+    if (!is_idle)
+    {
+        wipe_bitmap();
+        bitmap[0] = 0b01111111;
+        bitmap[7] = 0b11111110;
+        bitmap[248] = 0b01111111;
+        bitmap[255] = 0b11111110;
+        is_idle = true;
+    }
 }
 
 void setup()
 {
+    // Setup serial and RF communications
+    // rflib.setup_serial();
+    rflib.setup_RF(rf95);
+
     // Initialise clock and display
     init_clock();
     init_display();
@@ -352,20 +294,27 @@ void setup()
     Timer1.initialize(DISPLAY_REFRESH_MS);
     Timer1.attachInterrupt(update_display);
 
-    restart();
+    display_idle();
+    // Serial.println(F("Display board: Finished setup.\n"));
 }
 
 void loop()
 {
-    if (rf95.available())
+    if (rf95.available() & rflib.receive_RF_message(rf95, msgType, msgTime))
     {
-        check_for_RF_message(msgType, msgTime);
+        if (msgType == '1')
+        {
+            // Serial.println(F("Starting timer"));
+            restart();
+        }
+        else if (msgType == '0')
+        {
+            // Serial.println(F("Race stopping"));
+            display_idle();
+        }
     }
-    if (is_idle)
-    {
-        display_idle();
-    }
-    else if (tick >= BITMAP_REFRESH_TICKS)
+
+    else if (tick >= BITMAP_REFRESH_TICKS & !is_idle)
     {
         update_clock();
     }
