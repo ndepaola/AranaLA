@@ -1,6 +1,5 @@
 #include "Arduino.h"
 #include "AranaBase.h"
-#define MSG_LENGTH 8
 
 // Setup functions
 void AranaBase::setup_serial()
@@ -22,10 +21,6 @@ void AranaBase::setup_RF(RH_RF95 &rf95)
     pinMode(_RFM95_MOSI, INPUT);
     pinMode(_RFM95_RST, OUTPUT);
     pinMode(_RFM95_CS, OUTPUT);
-    // digitalWrite(RFM95_CS, LOW);
-    // digitalWrite(RFM95_RST, HIGH);
-    // delay(10);
-    // digitalWrite(RFM95_RST, LOW);
     digitalWrite(_RFM95_RST, LOW);
     pinMode(_RFM95_RST, OUTPUT);
     delayMicroseconds(100);

@@ -3,21 +3,22 @@
 #include <AranaReceive.h>
 
 // Pin definitions and RF parameters
-#define pin_a 6
-#define pin_b 7
-#define pin_sck 8
-#define pin_noe 9
-#define RFM95_SCK 13
-#define RFM95_MISO 12
-#define RFM95_MOSI 11
-#define RFM95_CS 5
-#define RFM95_RST 4
+#define RTC_INT 2
 #define RFM95_INT 3
+#define RFM95_RST 4
+#define RFM95_CS 5
+#define DMD_A 6
+#define DMD_B 7
+#define DMD_SCK 8
+#define DMD_NOE 9
+#define SYNC_PIN 10
+#define RFM95_MOSI 11
+#define RFM95_MISO 12
+#define RFM95_SCK 13
 #define RF95_FREQ 433.0
-#define MSG_LENGTH 16
 
 // Display board parameters
-#define BRIGHTNESS 1             // Between 1 and 255
+#define BRIGHTNESS 120           // Between 1 and 255
 #define DISPLAY_REFRESH_MS 500   // Microseconds between display refreshes
 #define BITMAP_REFRESH_TICKS 100 // 100 ticks (microseconds) between clock updates
 #define PANEL_WIDTH 32
@@ -35,8 +36,9 @@ unsigned char last_minutes = -1, last_tens = -1, last_seconds = -1, last_coln = 
 bool is_idle = false;
 
 // RF variables
-char msgType;
-unsigned int msgTime;
+unsigned long msgTime;
+unsigned int msgType;
+unsigned int msgID;
 
 // Other misc. variables
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
@@ -49,8 +51,8 @@ AranaReceive rflib(RFM95_MISO, RFM95_MOSI, RFM95_RST, RFM95_CS);
 
 void init_clock()
 {
-    pinMode(2, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(2), RTCInterruptHandler, RISING);
+    pinMode(RTC_INT, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(RTC_INT), RTCInterruptHandler, RISING);
     rtcObject.Begin();
     // TODO: Check if this is exactly 1000 Hz or if it's actually 1024 Hz
     rtcObject.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
@@ -61,11 +63,11 @@ void init_display()
 {
     // Initialise screen by wiping bitmap and setting IO pins
     wipe_bitmap();
-    pinMode(pin_a, OUTPUT);
-    pinMode(pin_b, OUTPUT);
-    pinMode(pin_sck, OUTPUT);
-    digitalWrite(pin_noe, LOW);
-    pinMode(pin_noe, OUTPUT);
+    pinMode(DMD_A, OUTPUT);
+    pinMode(DMD_B, OUTPUT);
+    pinMode(DMD_SCK, OUTPUT);
+    digitalWrite(DMD_NOE, LOW);
+    pinMode(DMD_NOE, OUTPUT);
     SPI.begin();
 }
 
@@ -115,18 +117,18 @@ void update_display()
     SPI.endTransaction();
 
     // Write to display board digital pins
-    digitalWrite(pin_sck, HIGH); // Latch DMD shift register output
-    digitalWrite(pin_sck, LOW);  // (Deliberately left as digitalWrite to ensure decent latching time)
+    digitalWrite(DMD_SCK, HIGH); // Latch DMD shift register output
+    digitalWrite(DMD_SCK, LOW);  // (Deliberately left as digitalWrite to ensure decent latching time)
 
-    digitalWrite(pin_a, scan_row & 0x01);
-    digitalWrite(pin_b, scan_row & 0x02);
+    digitalWrite(DMD_A, scan_row & 0x01);
+    digitalWrite(DMD_B, scan_row & 0x02);
 
     // Update scan row for next call to this function
     scan_row = (scan_row + 1) % 4;
 
     // Set display board brightness
     // TODO: Control brightness with a dial on the display board
-    analogWrite(pin_noe, BRIGHTNESS);
+    analogWrite(DMD_NOE, BRIGHTNESS);
 }
 
 void update_clock()
@@ -294,20 +296,30 @@ void setup()
     Timer1.initialize(DISPLAY_REFRESH_MS);
     Timer1.attachInterrupt(update_display);
 
+    // Prepare sync pin
+    pinMode(SYNC_PIN, INPUT_PULLUP); // TODO: Not pullup?
+    // digitalWrite(SYNC_PIN, LOW);
+
     display_idle();
     // Serial.println(F("Display board: Finished setup.\n"));
 }
 
 void loop()
 {
-    if (rf95.available() & rflib.receive_RF_message(rf95, msgType, msgTime))
+    // if (digitalRead(SYNC_PIN) == HIGH)
+    // {
+    //     // Reset DMD counter
+    //     // tick = 0;
+    //     Serial.println("Sync is high");
+    // }
+    if (rf95.available() & rflib.receive_RF_message(rf95, rflib.ID_GLOBAL, msgType, msgID, msgTime))
     {
-        if (msgType == '1')
+        if (msgType == rflib.MSG_START)
         {
             // Serial.println(F("Starting timer"));
             restart();
         }
-        else if (msgType == '0')
+        else if (msgType == rflib.MSG_STOP)
         {
             // Serial.println(F("Race stopping"));
             display_idle();
