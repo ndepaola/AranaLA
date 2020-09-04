@@ -106,8 +106,8 @@ void start_race()
 {
     // Serial.println("Starting");
     unsigned long msgTime = millis() - syncTime - LATENCY; // TODO: Use RTC
-    delay(LATENCY)
-        rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_START, 1, msgTime);
+    delay(LATENCY);
+    rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_START, 1, msgTime);
     digitalWrite(START_LED, HIGH);
     digitalWrite(FLASH_LED, HIGH);
     delay(FLASH_DELAY);
