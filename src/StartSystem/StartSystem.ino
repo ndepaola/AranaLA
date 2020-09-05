@@ -17,8 +17,6 @@
 #define RESET_BUTTON 1
 #define FALSE_START_BUTTON 4
 #define SYNC_BUTTON 6
-// #define START_BUTTON 4
-// #define RESET_BUTTON 6
 
 #define START_LED A3
 #define RESET_LED A2
@@ -27,6 +25,7 @@
 
 #define FLASH_LED 7
 #define FLASH_DELAY 200 // milliseconds
+#define FLASH_PAUSE 100
 
 #define LATENCY 125 // milliseconds
 
@@ -37,13 +36,6 @@ RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
 // DS3231M_Class DS3231M; // Create an instance of the DS3231M
 // RtcDS3231<TwoWire> rtc(Wire);
-
-// bool false_start = false;
-
-// Flash LED last 3 hours?
-// Make sure flash is visible from other end of track
-// Stay on long enough for camera to detect
-// Trigger finish system to start operating
 
 unsigned long tick = 0;
 
@@ -58,25 +50,12 @@ void setupClock()
 {
     pinMode(DS3231_INT, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(DS3231_INT), RTCInterruptHandler, RISING);
-    // rtc.Begin();
-    // rtc.SetSquareWavePin(DS3231SquareWavePin_ModeClock);
-    // rtc.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
-
-    // rtc.SetSquareWavePinClockFrequency(DS3231Sq);
-
-    // pinMode(DS3231_INT, INPUT_PULLUP);
-    // attachInterrupt(digitalPinToInterrupt(DS3231_INT), RTCInterruptHandler, RISING);
-    // while (!DS3231M.begin())
-    // DS3231M.begin();
-    // DS3231M.
-    // rtc.SetSquareWavePinClockFrequency(DS3231SquareWaveClock_1kHz);
 }
 
 void setup()
 {
     // Setup serial and RF communications
     // rflib.setup_serial();
-
     rflib.setup_RF(rf95);
     rflib.setup_SD();
 
@@ -99,16 +78,15 @@ void setup()
     // setupClock();
 
     // Serial.println("Start system: Finished setup.\n");
-    // Serial.println("Setup complete");
 }
 
 void start_race()
 {
     // Serial.println("Starting");
-    unsigned long msgTime = millis() - syncTime - LATENCY; // TODO: Use RTC
-    delay(LATENCY);
+    unsigned long msgTime = millis() - syncTime + LATENCY; // TODO: Use RTC
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_START, 1, msgTime);
     digitalWrite(START_LED, HIGH);
+    delay(LATENCY);
     digitalWrite(FLASH_LED, HIGH);
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
@@ -127,12 +105,16 @@ void reset()
 void false_start()
 {
     // Serial.println("False start");
-    unsigned long msgTime = millis() - syncTime - LATENCY; // TODO: Use RTC
+    unsigned long msgTime = millis() - syncTime + LATENCY; // TODO: Use RTC
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_FALSE_START, 1, msgTime);
     digitalWrite(FALSE_START_LED, HIGH);
+    delay(LATENCY);
+
+    // Flash the bright LED twice in rapid succession
     digitalWrite(FLASH_LED, HIGH);
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
+    delay(FLASH_PAUSE);
     digitalWrite(FLASH_LED, HIGH);
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
@@ -153,25 +135,26 @@ void sync()
 
 void loop()
 {
+    unsigned long curr_time = millis();
     if (digitalRead(START_BUTTON) == HIGH && off == ULONG_MAX)
     {
         start_race();
-        off = millis() + 1000 - FLASH_DELAY;
+        off = millis() + 1000 - (millis() - curr_time);
     }
     else if (digitalRead(RESET_BUTTON) == HIGH && off == ULONG_MAX)
     {
         reset();
-        off = millis() + 1000;
+        off = millis() + 1000 - (millis() - curr_time);
     }
-    else if (digitalRead(FALSE_START_BUTTON) == HIGH && off == ULONG_MAX)
+    else if (digitalRead(FALSE_START_BUTTON) == HIGH && (millis() >= off - 950 || off == ULONG_MAX))
     {
         false_start();
-        off = millis() + 1000 - FLASH_DELAY * 2;
+        off = millis() + 1000 - (millis() - curr_time);
     }
     else if (digitalRead(SYNC_BUTTON) == HIGH && off == ULONG_MAX)
     {
         sync();
-        off = millis() + 1000 - FLASH_DELAY;
+        off = millis() + 1000 - (millis() - curr_time);
     }
 
     if (millis() > off)

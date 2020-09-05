@@ -1,5 +1,5 @@
-#ifndef AranaSend_h
-#define AranaSend_h
+#ifndef AranaReceive_h
+#define AranaReceive_h
 
 #include "AranaBase.h"
 

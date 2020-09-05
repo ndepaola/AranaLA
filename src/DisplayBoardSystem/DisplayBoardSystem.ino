@@ -90,6 +90,7 @@ void restart()
     tick = 0;
     last_minutes = last_tens = last_seconds = last_coln = -1;
     is_idle = false;
+    update_display();
 }
 
 void update_display()
@@ -312,14 +313,15 @@ void loop()
     //     // tick = 0;
     //     Serial.println("Sync is high");
     // }
-    if (rf95.available() & rflib.receive_RF_message(rf95, rflib.ID_GLOBAL, msgType, msgID, msgTime))
+    if (rf95.available() && 
+        rflib.receive_RF_message(rf95, rflib.ID_GLOBAL, msgType, msgID, msgTime))
     {
         if (msgType == rflib.MSG_START)
         {
             // Serial.println(F("Starting timer"));
             restart();
         }
-        else if (msgType == rflib.MSG_STOP)
+        else if (msgType == rflib.MSG_STOP || msgType == rflib.MSG_FALSE_START)
         {
             // Serial.println(F("Race stopping"));
             display_idle();
