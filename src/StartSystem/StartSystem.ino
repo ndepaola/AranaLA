@@ -27,10 +27,15 @@
 #define FLASH_DELAY 200 // milliseconds
 #define FLASH_PAUSE 100
 
-#define LATENCY 125 // milliseconds
+#define LATENCY 247 // milliseconds
 
 unsigned long long syncTime = 0;
 unsigned long off = ULONG_MAX;
+unsigned long long start_button_pressed = 0;
+
+unsigned int count = 0;
+unsigned long long sync_button_activated = 0;
+
 
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
@@ -136,10 +141,28 @@ void sync()
 void loop()
 {
     unsigned long curr_time = millis();
-    if (digitalRead(START_BUTTON) == HIGH && off == ULONG_MAX)
+    if (digitalRead(START_BUTTON) == HIGH && (millis() >= off - 810 || off == ULONG_MAX))
     {
-        start_race();
+        unsigned long long next_button_pressed = millis();
+        // if (next_button_pressed - start_button_pressed <= 200)
+        // {
+        //     continue;
+        // }
+        // else 
+        if (next_button_pressed - start_button_pressed <= 4000 && !(millis() <= 4000))
+        {
+            false_start();
+        }
+        else
+        {
+            start_race();
+        }
         off = millis() + 1000 - (millis() - curr_time);
+        while (digitalRead(START_BUTTON) == HIGH)
+        {
+            delay(1);
+        }
+        start_button_pressed = next_button_pressed;
     }
     else if (digitalRead(RESET_BUTTON) == HIGH && off == ULONG_MAX)
     {
@@ -151,10 +174,38 @@ void loop()
         false_start();
         off = millis() + 1000 - (millis() - curr_time);
     }
-    else if (digitalRead(SYNC_BUTTON) == HIGH && off == ULONG_MAX)
+    else if (digitalRead(SYNC_BUTTON) == HIGH)
     {
-        sync();
-        off = millis() + 1000 - (millis() - curr_time);
+        if (count == 0)
+        {
+            sync_button_activated = millis();
+            count++;
+        }
+        // else if (count < 300 && (millis() - sync_button_activated >= 10 && millis() - sync_button_activated < 12))
+        // {
+        //     sync_button_activated = millis();
+        //     count++;
+        // }
+        else if (millis() - sync_button_activated >= 500)
+        {
+            count = 0;
+        }
+        else if (count < 300)
+        {
+            sync_button_activated = millis();
+            digitalWrite(SYNC_LED, HIGH);
+            delay(10);
+            digitalWrite(SYNC_LED, LOW);
+            count++;
+        }
+        else if (count == 300)
+        {
+            sync();
+            off = millis() + 1000 - (millis() - curr_time);
+            count = 0;
+        }
+        // sync();
+        
     }
 
     if (millis() > off)
