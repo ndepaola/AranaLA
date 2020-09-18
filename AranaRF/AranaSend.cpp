@@ -79,7 +79,7 @@ void AranaSend::write_to_SD(int msgType, unsigned long msgTime, unsigned long sy
 
     // Construct line to insert into CSV file
     char data[25];
-    snprintf_P(data, sizeof(data), PSTR("%s,%ul,%ul"), race_types[msgType], msgTime, syncTime);
+    snprintf_P(data, sizeof(data), PSTR("%s,%lu,%lu"), race_types[msgType], msgTime, syncTime);
 
     // Open CSV file, insert line, and close file
     File file = SD.open(FILENAME, FILE_WRITE);

@@ -90,7 +90,6 @@ void restart()
     tick = 0;
     last_minutes = last_tens = last_seconds = last_coln = -1;
     is_idle = false;
-    update_display();
 }
 
 void update_display()
@@ -298,7 +297,7 @@ void setup()
     Timer1.attachInterrupt(update_display);
 
     // Prepare sync pin
-    pinMode(SYNC_PIN, INPUT_PULLUP); // TODO: Not pullup?
+    // pinMode(SYNC_PIN, INPUT_PULLUP); // TODO: Not pullup?
     // digitalWrite(SYNC_PIN, LOW);
 
     display_idle();
@@ -313,7 +312,7 @@ void loop()
     //     // tick = 0;
     //     Serial.println("Sync is high");
     // }
-    if (rf95.available() && 
+    if (rf95.available() &&
         rflib.receive_RF_message(rf95, rflib.ID_GLOBAL, msgType, msgID, msgTime))
     {
         if (msgType == rflib.MSG_START)
@@ -328,7 +327,7 @@ void loop()
         }
     }
 
-    else if (tick >= BITMAP_REFRESH_TICKS & !is_idle)
+    else if ((tick >= BITMAP_REFRESH_TICKS || tick == 0) & !is_idle)
     {
         update_clock();
     }

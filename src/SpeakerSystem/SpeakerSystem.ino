@@ -47,8 +47,8 @@ void loop()
         else if (msgType == rflib.MSG_FALSE_START)
         {
             // Serial.println("False start");
-            play_sound();
-            delay(500);
+            // play_sound();
+            // delay(500);
             play_sound();
         }
     }
