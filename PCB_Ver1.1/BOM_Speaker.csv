@@ -1,0 +1,12 @@
+Comment,Description,Designator,Footprint,Quantity
+,,,,
+330n,Ceramic capacitor (20mm pitch),C1,CAP,1
+100n,Ceramic capacitor (20mm pitch),C2,CAP,1
+2xTERM,2-pin wire connector,"P1, P2",2xTERM,2
+10k,Resistor (horizontal),"R1, R2",RES2,2
+10k,Through hole potentiometer,"RV1, RV2",POT1,2
+ATmega328P,Atmel ATmega328P IC,U1,ATmega328P,1
+DFPlayer,DFPlayer Mini,U2,DFPlayer,1
+RFM96W,Adafruit RFM96W LoRa radio,U3,RFM96W,1
+L7805,L7805 5V voltage regulator,VR1,L7805,1
+X16MHz,16MHz crystal oscillator,XTAL1,X16MHz,1

@@ -1,0 +1,10 @@
+Comment,Description,Designator,Footprint,Quantity
+,,,,
+100n,Ceramic capacitor (20mm pitch),C1,CAP,1
+DMDHeader,Header for Freetronics DMD panel(s),DS1,DMDHeader,1
+2xTERM,2-pin wire connector,P1,2xTERM,1
+3xTERM,3-pin wire connector,P2,3xTERM,1
+RFM96W,Adafruit RFM96W LoRa radio,U1,RFM96W,1
+DS3231,DS3231 real-time clock,U2,DS3231,1
+ATmega328P,Atmel ATmega328P IC,U3,ATmega328P,1
+X16MHz,16MHz crystal oscillator,XTAL1,X16MHz,1
