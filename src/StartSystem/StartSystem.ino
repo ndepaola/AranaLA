@@ -40,6 +40,9 @@
 unsigned long syncTime = 0;
 unsigned long off = ULONG_MAX;
 unsigned long start_button_pressed = 0;
+unsigned long msgTimeStart = 0;
+int msgTypeStart = 0;
+bool update = false;
 
 // Sync button 3 second timer variables
 unsigned int count = 0;
@@ -68,14 +71,97 @@ void setupClock()
     attachInterrupt(digitalPinToInterrupt(DS3231_INT), RTCInterruptHandler, RISING);
 }
 
+void setup_RF()
+{
+    // Set pins for RF module
+    // Serial.println(F("Beginning initialisation RF module."));
+    pinMode(RFM95_MISO, OUTPUT); // default slave select pin for client mode
+    pinMode(RFM95_MOSI, INPUT);
+    pinMode(RFM95_RST, OUTPUT);
+    pinMode(RFM95_CS, OUTPUT);
+    digitalWrite(RFM95_RST, LOW);
+    pinMode(RFM95_RST, OUTPUT);
+    delayMicroseconds(100);
+    pinMode(RFM95_RST, INPUT);
+    delay(5);
+    while (!rf95.init())
+    {
+        digitalWrite(START_LED, HIGH);
+        digitalWrite(RESET_LED, HIGH);
+        digitalWrite(SYNC_LED, HIGH);
+        digitalWrite(FALSE_START_LED, HIGH);
+        
+        delay(500);
+        
+        digitalWrite(START_LED, LOW);
+        digitalWrite(RESET_LED, LOW);
+        digitalWrite(SYNC_LED, LOW);
+        digitalWrite(FALSE_START_LED, LOW);
+
+        delay(500);
+    }
+    rf95.setTxPower(13, false);
+    // Serial.println(F("Completed initialisation of RF module."));
+}
+
+#define FILENAME "data.csv"
+void setup_SD()
+{
+    // Serial.println(F("Beginning initialisation of SD card module."));
+    digitalWrite(RFM95_CS, HIGH);
+    pinMode(SD_CS, OUTPUT);
+    digitalWrite(SD_CS, LOW);
+
+    // Wait until SD card is available
+    while (!SD.begin(SD_CS))
+    {
+        digitalWrite(START_LED, HIGH);
+        digitalWrite(RESET_LED, HIGH);
+        digitalWrite(SYNC_LED, HIGH);
+        digitalWrite(FALSE_START_LED, HIGH);
+        
+        delay(150);
+        
+        digitalWrite(START_LED, LOW);
+        digitalWrite(RESET_LED, LOW);
+        digitalWrite(SYNC_LED, LOW);
+        digitalWrite(FALSE_START_LED, LOW);
+
+        delay(100);
+
+        digitalWrite(START_LED, HIGH);
+        digitalWrite(RESET_LED, HIGH);
+        digitalWrite(SYNC_LED, HIGH);
+        digitalWrite(FALSE_START_LED, HIGH);
+        
+        delay(150);
+        
+        digitalWrite(START_LED, LOW);
+        digitalWrite(RESET_LED, LOW);
+        digitalWrite(SYNC_LED, LOW);
+        digitalWrite(FALSE_START_LED, LOW);
+
+        delay(600);
+    }
+
+    // If necessary, create the CSV file with headers
+    if (!SD.exists(FILENAME))
+    {
+        // Serial.println(F("File does not exist - creating file and writing headers."));
+        File file = SD.open(FILENAME, FILE_WRITE);
+        file.println(F("Message Type,Time,Sync Time"));
+        file.close();
+    }
+
+    digitalWrite(SD_CS, HIGH);
+    digitalWrite(RFM95_CS, LOW);
+
+    // Serial.println(F("Completed initialisation of SD card module."));
+}
+
 // Setup the environment
 void setup()
 {
-    // Setup serial and RF communications
-    // rflib.setup_serial();
-    rflib.setup_RF(rf95);
-    rflib.setup_SD();
-
     // Initialise buttons as inputs
     pinMode(START_BUTTON, INPUT);
     pinMode(RESET_BUTTON, INPUT);
@@ -95,6 +181,14 @@ void setup()
     digitalWrite(SYNC_LED, LOW);
     digitalWrite(FALSE_START_LED, LOW);
 
+    // Setup serial and RF communications
+    // rflib.setup_serial();
+    // rflib.setup_RF(rf95);
+    // rflib.setup_SD();
+    setup_RF();
+    setup_SD();
+    
+
     // Setup RTC
     setupClock();
 
@@ -112,8 +206,8 @@ void start_race()
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_START, 1, msgTime);
 
     // Turn on the START button LED
-    digitalWrite(START_LED, HIGH);
     delay(LATENCY);
+    digitalWrite(START_LED, HIGH);
 
     // Turn on the Fash LED
     digitalWrite(FLASH_LED, HIGH);
@@ -123,7 +217,9 @@ void start_race()
     digitalWrite(FLASH_LED, LOW);
 
     // Record start time of race to SD card
-    rflib.write_to_SD(rflib.MSG_START, msgTime, syncTime);
+    // rflib.write_to_SD(rflib.MSG_START, msgTime, syncTime);
+    msgTypeStart = rflib.MSG_START;
+    msgTimeStart = msgTime;
 }
 
 // Function called when the STOP button is pressed.  This function is designed to save power by setting the LED display into low power mode (no LEDs on)
@@ -152,20 +248,24 @@ void false_start()
 
     // Send the RF message
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_FALSE_START, 1, msgTime);
-    digitalWrite(FALSE_START_LED, HIGH);
     delay(LATENCY);
 
     // Flash the bright LED twice in rapid succession
     digitalWrite(FLASH_LED, HIGH);
+    digitalWrite(START_LED, HIGH);
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
+    digitalWrite(START_LED, LOW);
     delay(FLASH_PAUSE);
     digitalWrite(FLASH_LED, HIGH);
+    digitalWrite(START_LED, HIGH);
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
 
     // Save information to the SD card
-    rflib.write_to_SD(rflib.MSG_FALSE_START, msgTime, syncTime);
+    // rflib.write_to_SD(rflib.MSG_FALSE_START, msgTime, syncTime);
+    msgTypeStart = rflib.MSG_FALSE_START;
+    msgTimeStart = msgTime;
 }
 
 void sync()
@@ -202,46 +302,36 @@ void loop()
             delay(5);
         }
         start_button_pressed = next_button_pressed;
+        update = true;
     }
     else if (digitalRead(RESET_BUTTON) == HIGH && off == ULONG_MAX)
     {
         reset();
         // off = tick - syncTime + 32768 - ((tick - syncTime) - curr_time);
         off = curr_time + 32768;
+        while (digitalRead(RESET_BUTTON) == HIGH)
+        {
+            delay(5);
+        }
     }
-    // else if (digitalRead(FALSE_START_BUTTON) == HIGH && (tick >= off - 800 * 32 || off == ULONG_MAX))
-    // {
-    //     false_start();
-    //     off = tick + 1024 * 32 - (tick - curr_time);
-    // }
     else if (digitalRead(SYNC_BUTTON) == HIGH)
     {
         sync();
         off = curr_time + 32768;
-        // if (count == 0)
-        // {
-        //     sync_button_activated = tick;
-        //     count++;
-        // }
-        // else if (tick - sync_button_activated >= 512 * 32)
-        // {
-        //     count = 0;
-        // }
-        // else if (count < 300)
-        // {
-        //     sync_button_activated = tick;
-        //     digitalWrite(SYNC_LED, HIGH);
-        //     delay(10);
-        //     digitalWrite(SYNC_LED, LOW);
-        //     count++;
-        // }
-        // else if (count == 300)
-        // {
-        //     sync();
-        //     off = tick + 1024 * 32 - (tick - curr_time);
-        //     count = 0;
-        // }
-        
+        while (digitalRead(SYNC_BUTTON) == HIGH)
+        {
+            delay(5);
+        }        
+    }
+    else if (digitalRead(FALSE_START_BUTTON) == HIGH && (tick >= off - 25600 || off == ULONG_MAX))
+    {
+
+    }
+
+    if (tick - start_button_pressed > 128000 && update)
+    {
+        rflib.write_to_SD(msgTypeStart, msgTimeStart, syncTime);
+        update = false;
     }
 
     if (curr_time > off)
