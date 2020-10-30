@@ -37,7 +37,7 @@
 #define LATENCY 247 // milliseconds
 
 // Start button additional variables
-unsigned long syncTime = 0;
+// unsigned long syncTime = 0;
 unsigned long off = ULONG_MAX;
 unsigned long start_button_pressed = 0;
 unsigned long msgTimeStart = 0;
@@ -200,7 +200,8 @@ void start_race()
 {
     // Serial.println("Starting");
     // Set the message time to be relative to the sync time, with the delay of the speaker accounted for
-    unsigned long msgTime = tick - syncTime + LATENCY; // TODO: Use RTC
+    // unsigned long msgTime = tick + LATENCY; // TODO: Use RTC
+    unsigned long msgTime = tick + (unsigned long) 8094; // TODO: Use RTC
 
     // Send the RF message
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_START, 1, msgTime);
@@ -227,16 +228,16 @@ void reset()
 {
     // Serial.println("Resetting");
     // Set the message time to be relative to the sync time
-    unsigned long msgTime = tick - syncTime; // TODO: Use RTC
+    unsigned long msgTime = tick; // TODO: Use RTC
 
     // Send the RF message
-    rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_STOP, 1, msgTime);
+    // rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_STOP, 1, msgTime);
 
     // Turn on the STOP button LED
     digitalWrite(RESET_LED, HIGH);
 
     // Save the information to the SD card
-    rflib.write_to_SD(rflib.MSG_STOP, msgTime, syncTime);
+    // rflib.write_to_SD(rflib.MSG_STOP, msgTime, 0);
 }
 
 // Function called when START button is pressed within 4 seconds of last START button press
@@ -244,7 +245,8 @@ void false_start()
 {
     // Serial.println("False start");
     // Set the message time to be relative to the sync time, with the delay of the speaker accounted for
-    unsigned long msgTime = tick - syncTime + LATENCY; // TODO: Use RTC
+    // unsigned long msgTime = tick + LATENCY; // TODO: Use RTC
+    unsigned long msgTime = tick + (unsigned long) 8094;
 
     // Send the RF message
     rflib.send_RF_message(rf95, rflib.ID_GLOBAL, rflib.MSG_FALSE_START, 1, msgTime);
@@ -271,13 +273,12 @@ void false_start()
 void sync()
 {
     // Serial.println("Syncing");
+    unsigned long msgTime = tick; // TODO: Use RTC
     digitalWrite(SYNC_LED, HIGH);
     digitalWrite(FLASH_LED, HIGH);
-    // syncTime = tick;
     delay(FLASH_DELAY);
     digitalWrite(FLASH_LED, LOW);
-    unsigned long msgTime = 0; // TODO: Use RTC
-    rflib.write_to_SD(rflib.MSG_SYNC, msgTime, syncTime);
+    rflib.write_to_SD(rflib.MSG_SYNC, msgTime, 0);
 }
 
 void loop()
@@ -287,7 +288,7 @@ void loop()
     if (digitalRead(START_BUTTON) == HIGH)
     {
         unsigned long next_button_pressed = tick;
-        if (next_button_pressed - start_button_pressed <= 128000 && !(tick <= 128000))
+        if (next_button_pressed - start_button_pressed <= (unsigned long) 128000 && !(tick <= (unsigned long) 128000))
         {
             false_start();
         }
@@ -296,10 +297,10 @@ void loop()
             start_race();
         }
         // off = tick - syncTime + 32768 - ((tick - syncTime) - curr_time);
-        off = curr_time + 32768;
+        off = curr_time + (unsigned long) 32768;
         while (digitalRead(START_BUTTON) == HIGH)
         {
-            delay(5);
+            // delay(5);
         }
         start_button_pressed = next_button_pressed;
         update = true;
@@ -308,7 +309,7 @@ void loop()
     {
         reset();
         // off = tick - syncTime + 32768 - ((tick - syncTime) - curr_time);
-        off = curr_time + 32768;
+        off = curr_time + (unsigned long) 32768;
         while (digitalRead(RESET_BUTTON) == HIGH)
         {
             delay(5);
@@ -317,20 +318,20 @@ void loop()
     else if (digitalRead(SYNC_BUTTON) == HIGH)
     {
         sync();
-        off = curr_time + 32768;
+        off = curr_time + (unsigned long) 32768;
         while (digitalRead(SYNC_BUTTON) == HIGH)
         {
             delay(5);
         }        
     }
-    else if (digitalRead(FALSE_START_BUTTON) == HIGH && (tick >= off - 25600 || off == ULONG_MAX))
+    else if (digitalRead(FALSE_START_BUTTON) == HIGH && (tick >= off - (unsigned long) 25600 || off == ULONG_MAX))
     {
 
     }
 
-    if (tick - start_button_pressed > 128000 && update)
+    if (tick - start_button_pressed > (unsigned long) 128000 && update)
     {
-        rflib.write_to_SD(msgTypeStart, msgTimeStart, syncTime);
+        rflib.write_to_SD(msgTypeStart, msgTimeStart, 0);
         update = false;
     }
 
